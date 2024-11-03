@@ -11,6 +11,8 @@ use {
     grug::{Addr, Coins, Denom, Inner, IsZero, Message, MutableCtx, Part, Response, Uint128},
 };
 
+/// The `instantiate` function initializes the token factory contract with the provided denomination creation fee.
+/// It ensures that the denomination creation fee is non-zero and saves it in the contract's storage.
 #[cfg_attr(not(feature = "library"), grug::export)]
 pub fn instantiate(ctx: MutableCtx, msg: InstantiateMsg) -> anyhow::Result<Response> {
     ensure!(
@@ -23,6 +25,7 @@ pub fn instantiate(ctx: MutableCtx, msg: InstantiateMsg) -> anyhow::Result<Respo
     Ok(Response::new())
 }
 
+/// The `execute` function handles various token-related operations, such as creating denominations, minting tokens, and burning tokens.
 #[cfg_attr(not(feature = "library"), grug::export)]
 pub fn execute(ctx: MutableCtx, msg: ExecuteMsg) -> anyhow::Result<Response> {
     match msg {
@@ -40,6 +43,8 @@ pub fn execute(ctx: MutableCtx, msg: ExecuteMsg) -> anyhow::Result<Response> {
     }
 }
 
+/// The `create` function creates a new denomination with the provided subdenomination, username, and admin.
+/// It ensures the sender is associated with the username (if provided), verifies the correct denomination creation fee, and saves the new denomination and its admin.
 fn create(
     ctx: MutableCtx,
     subdenom: Denom,
@@ -108,6 +113,8 @@ fn create(
     Ok(Response::new())
 }
 
+/// The `mint` function mints new tokens of the specified denomination and transfers them to the specified address.
+/// It ensures the sender is the admin of the denomination before minting the tokens.
 fn mint(ctx: MutableCtx, denom: Denom, to: Addr, amount: Uint128) -> anyhow::Result<Response> {
     ensure!(
         ctx.sender == DENOM_ADMINS.load(ctx.storage, &denom)?,
@@ -123,6 +130,8 @@ fn mint(ctx: MutableCtx, denom: Denom, to: Addr, amount: Uint128) -> anyhow::Res
     )?))
 }
 
+/// The `burn` function burns tokens of the specified denomination from the specified address.
+/// It ensures the sender is the admin of the denomination before burning the tokens.
 fn burn(ctx: MutableCtx, denom: Denom, from: Addr, amount: Uint128) -> anyhow::Result<Response> {
     ensure!(
         ctx.sender == DENOM_ADMINS.load(ctx.storage, &denom)?,

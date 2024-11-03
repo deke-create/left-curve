@@ -19,6 +19,8 @@ use {
     },
 };
 
+/// The `instantiate` function initializes the account factory contract with the provided code hashes and keys.
+/// It also onboards new users by creating initial accounts for them.
 #[cfg_attr(not(feature = "library"), grug::export)]
 pub fn instantiate(ctx: MutableCtx, msg: InstantiateMsg) -> StdResult<Response> {
     // Save the code hashes associated with the account types.
@@ -48,10 +50,8 @@ pub fn instantiate(ctx: MutableCtx, msg: InstantiateMsg) -> StdResult<Response> 
     Ok(Response::new().add_messages(instantiate_msgs))
 }
 
-// A new user who wishes to be onboarded must first make an initial deposit,
-// then send a transaction with the account factory as sender, that contains
-// exactly one message, to execute the factory itself with `Execute::RegisterUser`.
-// This transaction does not need to include any metadata or credential.
+/// The `authenticate` function authenticates a transaction for registering a new user.
+/// It ensures the transaction contains exactly one message to execute the factory itself with `Execute::RegisterUser`.
 #[cfg_attr(not(feature = "library"), grug::export)]
 pub fn authenticate(ctx: AuthCtx, mut tx: Tx) -> anyhow::Result<AuthResponse> {
     let mut msgs = tx.msgs.iter();
@@ -102,6 +102,7 @@ pub fn authenticate(ctx: AuthCtx, mut tx: Tx) -> anyhow::Result<AuthResponse> {
         .request_backrun(false))
 }
 
+/// The `execute` function handles various account-related operations, such as depositing funds, registering users, registering accounts, and configuring Safe accounts.
 #[cfg_attr(not(feature = "library"), grug::export)]
 pub fn execute(ctx: MutableCtx, msg: ExecuteMsg) -> anyhow::Result<Response> {
     match msg {
@@ -116,6 +117,7 @@ pub fn execute(ctx: MutableCtx, msg: ExecuteMsg) -> anyhow::Result<Response> {
     }
 }
 
+/// The `deposit` function allows the IBC transfer contract to make deposits to the account factory.
 fn deposit(ctx: MutableCtx, recipient: Addr) -> anyhow::Result<Response> {
     let ibc_transfer: Addr = ctx.querier.query_app_config(IBC_TRANSFER_KEY)?;
 
@@ -141,6 +143,8 @@ fn deposit(ctx: MutableCtx, recipient: Addr) -> anyhow::Result<Response> {
     Ok(Response::new())
 }
 
+/// The `register_user` function registers a new user with the provided username, key, and key hash.
+/// It ensures the username does not already exist and saves the key.
 fn register_user(
     ctx: MutableCtx,
     username: Username,
@@ -179,8 +183,8 @@ fn register_user(
     )?))
 }
 
-// Onboarding a new user involves saving an initial key, and intantiate an
-// initial account, under the username.
+/// The `onboard_new_user` function onboards a new user by creating an initial account for them.
+/// It associates the key with the user, increments the global account index, and saves the account info under the username.
 fn onboard_new_user(
     storage: &mut dyn Storage,
     factory: Addr,
@@ -242,6 +246,8 @@ fn onboard_new_user(
     )
 }
 
+/// The `register_account` function registers a new account with the provided parameters.
+/// It performs basic validations, increments the global account index, and saves the account info.
 fn register_account(ctx: MutableCtx, params: AccountParams) -> anyhow::Result<Response> {
     // Basic validations of the account.
     // - For single signature accounts (spot and margin), one can only register
@@ -300,6 +306,8 @@ fn register_account(ctx: MutableCtx, params: AccountParams) -> anyhow::Result<Re
     )?))
 }
 
+/// The `configure_safe` function configures a Safe account with the provided parameter updates.
+/// It updates the account info and ensures the voting threshold is not greater than the total voting power.
 fn configure_safe(ctx: MutableCtx, updates: multi::ParamUpdates) -> anyhow::Result<Response> {
     for member in updates.members.add().keys() {
         ACCOUNTS_BY_USER.insert(ctx.storage, (member, ctx.sender))?;

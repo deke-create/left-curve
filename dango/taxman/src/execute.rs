@@ -12,6 +12,7 @@ use {
     },
 };
 
+/// The `instantiate` function initializes the taxman contract with the provided configuration.
 #[cfg_attr(not(feature = "library"), grug::export)]
 pub fn instantiate(ctx: MutableCtx, msg: InstantiateMsg) -> StdResult<Response> {
     CONFIG.save(ctx.storage, &msg.config)?;
@@ -19,6 +20,7 @@ pub fn instantiate(ctx: MutableCtx, msg: InstantiateMsg) -> StdResult<Response> 
     Ok(Response::new())
 }
 
+/// The `execute` function handles various taxman-related operations, such as updating the fee configuration.
 #[cfg_attr(not(feature = "library"), grug::export)]
 pub fn execute(ctx: MutableCtx, msg: ExecuteMsg) -> anyhow::Result<Response> {
     match msg {
@@ -26,6 +28,8 @@ pub fn execute(ctx: MutableCtx, msg: ExecuteMsg) -> anyhow::Result<Response> {
     }
 }
 
+/// The `update_config` function updates the fee configuration of the taxman contract.
+/// It ensures that only the chain's owner can update the fee configuration.
 fn update_config(ctx: MutableCtx, new_cfg: Config) -> anyhow::Result<Response> {
     let cfg = ctx.querier.query_config()?;
 
@@ -40,7 +44,8 @@ fn update_config(ctx: MutableCtx, new_cfg: Config) -> anyhow::Result<Response> {
     Ok(Response::new())
 }
 
-// TODO: exempt the account factory from paying fee.
+/// The `withhold_fee` function withholds the maximum amount of fee a transaction may incur.
+/// It ensures that the account factory contract is exempt from gas fees and force transfers the fee amount from the sender to the fee recipient.
 #[cfg_attr(not(feature = "library"), grug::export)]
 pub fn withhold_fee(ctx: AuthCtx, tx: Tx) -> StdResult<Response> {
     let fee_cfg = CONFIG.load(ctx.storage)?;
@@ -87,6 +92,8 @@ pub fn withhold_fee(ctx: AuthCtx, tx: Tx) -> StdResult<Response> {
     Ok(Response::new().may_add_message(withhold_msg))
 }
 
+/// The `finalize_fee` function finalizes the fee for a transaction based on the actual gas consumed.
+/// It refunds any excess fee withheld earlier during `withhold_fee` and ensures that the account factory contract is exempt from gas fees.
 #[cfg_attr(not(feature = "library"), grug::export)]
 pub fn finalize_fee(ctx: AuthCtx, tx: Tx, outcome: TxOutcome) -> StdResult<Response> {
     let fee_cfg = CONFIG.load(ctx.storage)?;
