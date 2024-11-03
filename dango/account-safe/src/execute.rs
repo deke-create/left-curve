@@ -16,6 +16,8 @@ use {
     },
 };
 
+/// The `instantiate` function initializes the Safe account contract.
+/// It ensures that only the account factory can create new accounts.
 #[cfg_attr(not(feature = "library"), grug::export)]
 pub fn instantiate(ctx: MutableCtx, _msg: InstantiateMsg) -> anyhow::Result<Response> {
     let account_factory: Addr = ctx.querier.query_app_config(ACCOUNT_FACTORY_KEY)?;
@@ -29,6 +31,8 @@ pub fn instantiate(ctx: MutableCtx, _msg: InstantiateMsg) -> anyhow::Result<Resp
     Ok(Response::new())
 }
 
+/// The `authenticate` function authenticates a transaction for the Safe account.
+/// It ensures that the transaction is executing the Safe account itself and performs additional checks for voting.
 #[cfg_attr(not(feature = "library"), grug::export)]
 pub fn authenticate(ctx: AuthCtx, tx: Tx) -> anyhow::Result<AuthResponse> {
     let metadata: Metadata = tx.data.clone().deserialize_json()?;
@@ -56,11 +60,14 @@ pub fn authenticate(ctx: AuthCtx, tx: Tx) -> anyhow::Result<AuthResponse> {
     Ok(AuthResponse::new().request_backrun(false))
 }
 
+/// The `receive` function is a placeholder for handling received funds.
+/// Currently, it does nothing and accepts all transfers.
 #[cfg_attr(not(feature = "library"), grug::export)]
 pub fn receive(_ctx: MutableCtx) -> StdResult<Response> {
     Ok(Response::new())
 }
 
+/// The `execute` function handles various Safe account-related operations, such as proposing, voting, and executing proposals.
 #[cfg_attr(not(feature = "library"), grug::export)]
 pub fn execute(ctx: MutableCtx, msg: ExecuteMsg) -> anyhow::Result<Response> {
     match msg {
@@ -79,6 +86,8 @@ pub fn execute(ctx: MutableCtx, msg: ExecuteMsg) -> anyhow::Result<Response> {
     }
 }
 
+/// The `propose` function creates a new proposal for the Safe account.
+/// It queries the Safe's parameters from the account factory and saves the proposal with the current voting period and parameters.
 fn propose(
     ctx: MutableCtx,
     title: String,
@@ -125,6 +134,8 @@ fn propose(
     Ok(Response::new())
 }
 
+/// The `do_vote` function handles voting on a proposal for the Safe account.
+/// It ensures the voter hasn't already voted, updates the vote count, and updates the proposal's status if possible.
 fn do_vote(
     ctx: MutableCtx,
     proposal_id: ProposalId,
@@ -222,6 +233,8 @@ fn do_vote(
     Ok(Response::new().add_messages(msgs))
 }
 
+/// The `execute_proposal` function executes a passed proposal for the Safe account.
+/// It ensures the proposal has passed and the timelock has elapsed before executing the proposal.
 fn execute_proposal(ctx: MutableCtx, proposal_id: ProposalId) -> anyhow::Result<Response> {
     let mut proposal = PROPOSALS.load(ctx.storage, proposal_id)?;
 

@@ -16,6 +16,8 @@ use {
 
 // ---------------------------------- config -----------------------------------
 
+/// The `do_configure` function updates the configuration of the blockchain.
+/// It ensures the sender is authorized to set the config and updates the config and app configs accordingly.
 pub fn do_configure(
     storage: &mut dyn Storage,
     block: BlockInfo,
@@ -103,6 +105,8 @@ fn _do_configure(
 
 // ---------------------------------- upload -----------------------------------
 
+/// The `do_upload` function uploads a new contract code to the blockchain.
+/// It ensures the user has the permission to upload contracts and saves the code if it doesn't already exist.
 pub fn do_upload(
     storage: &mut dyn Storage,
     gas_tracker: GasTracker,
@@ -156,6 +160,8 @@ fn _do_upload(
 
 // --------------------------------- transfer ----------------------------------
 
+/// The `do_transfer` function transfers coins from one address to another.
+/// It ensures the transfer is successful and optionally calls the recipient account's `receive` entry point.
 pub fn do_transfer<VM>(
     vm: VM,
     storage: Box<dyn Storage>,
@@ -302,6 +308,8 @@ where
 
 // -------------------------------- instantiate --------------------------------
 
+/// The `do_instantiate` function instantiates a new contract with the provided code hash, message, salt, label, admin, and funds.
+/// It ensures the user has the permission to instantiate contracts and saves the contract info if it doesn't already exist.
 pub fn do_instantiate<VM>(
     vm: VM,
     storage: Box<dyn Storage>,
@@ -438,6 +446,8 @@ where
 
 // ---------------------------------- execute ----------------------------------
 
+/// The `do_execute` function executes a contract with the provided message and funds.
+/// It ensures the execution is successful and calls the contract's `execute` entry point.
 pub fn do_execute<VM>(
     vm: VM,
     storage: Box<dyn Storage>,
@@ -542,6 +552,8 @@ where
 
 // ---------------------------------- migrate ----------------------------------
 
+/// The `do_migrate` function migrates a contract to a new code hash with the provided message.
+/// It ensures the sender is the admin of the contract and updates the contract info.
 pub fn do_migrate<VM>(
     vm: VM,
     storage: Box<dyn Storage>,
@@ -643,6 +655,8 @@ where
 
 // ----------------------------------- reply -----------------------------------
 
+/// The `do_reply` function handles the reply to a submessage with the provided message and result.
+/// It calls the contract's `reply` entry point.
 pub fn do_reply<VM>(
     vm: VM,
     storage: Box<dyn Storage>,
@@ -725,6 +739,8 @@ where
 
 // ------------------------------- authenticate --------------------------------
 
+/// The `do_authenticate` function authenticates a transaction by calling the sender account's `authenticate` entry point.
+/// It ensures the authentication is successful and returns the events and whether backrun is requested.
 pub fn do_authenticate<VM>(
     vm: VM,
     storage: Box<dyn Storage>,
@@ -794,6 +810,8 @@ where
 
 // ---------------------------------- backrun ----------------------------------
 
+/// The `do_backrun` function performs the backrun operation for a transaction by calling the sender account's `backrun` entry point.
+/// It ensures the backrun is successful and returns the events.
 pub fn do_backrun<VM>(
     vm: VM,
     storage: Box<dyn Storage>,
@@ -847,6 +865,8 @@ where
 
 // ---------------------------------- taxman -----------------------------------
 
+/// The `do_withhold_fee` function withholds the maximum amount of fee a transaction may incur by calling the taxman's `withhold_fee` entry point.
+/// It ensures the sender has sufficient token balance to cover the maximum possible fee.
 pub fn do_withhold_fee<VM>(
     vm: VM,
     storage: Box<dyn Storage>,
@@ -903,6 +923,8 @@ where
     }
 }
 
+/// The `do_finalize_fee` function finalizes the fee for a transaction by calling the taxman's `finalize_fee` entry point.
+/// It ensures the transaction didn't use up all the gas it has requested and refunds the difference if applicable.
 pub fn do_finalize_fee<VM>(
     vm: VM,
     storage: Box<dyn Storage>,
@@ -965,6 +987,8 @@ where
 
 // ----------------------------------- cron ------------------------------------
 
+/// The `do_cron_execute` function performs the cronjob for a contract by calling the contract's `cron_execute` entry point.
+/// It ensures the cronjob is successful and returns the events.
 pub fn do_cron_execute<VM>(
     vm: VM,
     storage: Box<dyn Storage>,

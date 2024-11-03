@@ -56,6 +56,9 @@ where
     VM: Vm + Clone,
     AppError: From<DB::Error> + From<VM::Error>,
 {
+    /// The `do_init_chain` function initializes the chain with the provided chain ID, block information, and genesis state.
+    /// It saves the chain ID, config, genesis block, app configs, and schedules cronjobs.
+    /// It processes genesis messages and persists the state changes to disk.
     pub fn do_init_chain(
         &self,
         chain_id: String,
@@ -138,6 +141,8 @@ where
         Ok(root_hash.unwrap())
     }
 
+    /// The `do_finalize_block` function finalizes the block with the provided block information and transactions.
+    /// It processes cronjobs and transactions, saves the last committed block, and flushes the state changes to the DB.
     pub fn do_finalize_block(&self, block: BlockInfo, txs: Vec<Tx>) -> AppResult<BlockOutcome> {
         let mut buffer = Shared::new(Buffer::new(self.db.state_storage(None)?, None));
 
@@ -253,6 +258,7 @@ where
         })
     }
 
+    /// The `do_commit` function commits the state changes to the DB.
     pub fn do_commit(&self) -> AppResult<()> {
         self.db.commit()?;
 
@@ -262,11 +268,9 @@ where
         Ok(())
     }
 
-    // For `CheckTx`, we only do the first two steps of the transaction
-    // processing flow:
-    // 1.`withhold_fee`, where the taxman makes sure the sender has sufficient
-    //   tokens to cover the tx fee;
-    // 2. `authenticate`, where the sender account authenticates the transaction.
+    /// The `do_check_tx` function checks the transaction by performing the first two steps of the transaction processing flow:
+    /// 1. `withhold_fee`, where the taxman makes sure the sender has sufficient tokens to cover the tx fee;
+    /// 2. `authenticate`, where the sender account authenticates the transaction.
     pub fn do_check_tx(&self, tx: Tx) -> AppResult<Outcome> {
         let buffer = Shared::new(Buffer::new(self.db.state_storage(None)?, None));
         let block = LAST_FINALIZED_BLOCK.load(&buffer)?;
@@ -308,8 +312,8 @@ where
         Ok(new_outcome(gas_tracker, Ok(events)))
     }
 
-    // Returns (last_block_height, last_block_app_hash).
-    // Note that we are returning the app hash, not the block hash.
+    /// The `do_info` function returns the last block height and the last block app hash.
+    /// If the DB doesn't have a version yet, it returns zero height and an all-zero hash.
     pub fn do_info(&self) -> AppResult<(u64, Hash256)> {
         let Some(version) = self.db.latest_version() else {
             // The DB doesn't have a version yet. This is the case if the chain
@@ -329,6 +333,8 @@ where
         Ok((version, root_hash))
     }
 
+    /// The `do_query_app` function performs a query on the app's state at the specified height.
+    /// It processes the query and returns the query response.
     pub fn do_query_app(&self, req: Query, height: u64, prove: bool) -> AppResult<QueryResponse> {
         if prove {
             // We can't do Merkle proof for smart queries. Only raw store query
@@ -362,11 +368,8 @@ where
         )
     }
 
-    /// Performs a raw query of the app's underlying key-value store.
-    ///
-    /// Returns:
-    /// - the value corresponding to the given key; `None` if the key doesn't exist;
-    /// - the Merkle proof; `None` if a proof is not requested (`prove` is false).
+    /// The `do_query_store` function performs a raw query of the app's underlying key-value store.
+    /// It returns the value corresponding to the given key and the Merkle proof if requested.
     pub fn do_query_store(
         &self,
         key: &[u8],
@@ -392,6 +395,8 @@ where
         Ok((value, proof))
     }
 
+    /// The `do_simulate` function simulates the execution of an unsigned transaction at the specified height.
+    /// It processes the transaction and returns the transaction outcome.
     pub fn do_simulate(
         &self,
         unsigned_tx: UnsignedTx,
@@ -445,6 +450,8 @@ where
     VM: Vm + Clone,
     AppError: From<DB::Error> + From<VM::Error>,
 {
+    /// The `do_init_chain_raw` function initializes the chain with the provided chain ID, block information, and raw genesis state.
+    /// It deserializes the raw genesis state and calls the `do_init_chain` function.
     pub fn do_init_chain_raw(
         &self,
         chain_id: String,
@@ -456,6 +463,8 @@ where
         self.do_init_chain(chain_id, block, genesis_state)
     }
 
+    /// The `do_finalize_block_raw` function finalizes the block with the provided block information and raw transactions.
+    /// It deserializes the raw transactions and calls the `do_finalize_block` function.
     pub fn do_finalize_block_raw<T>(
         &self,
         block: BlockInfo,
@@ -472,12 +481,15 @@ where
         self.do_finalize_block(block, txs)
     }
 
+    /// The `do_check_tx_raw` function checks the raw transaction by deserializing it and calling the `do_check_tx` function.
     pub fn do_check_tx_raw(&self, raw_tx: &[u8]) -> AppResult<Outcome> {
         let tx = raw_tx.deserialize_json()?;
 
         self.do_check_tx(tx)
     }
 
+    /// The `do_simulate_raw` function simulates the execution of a raw unsigned transaction at the specified height.
+    /// It deserializes the raw unsigned transaction and calls the `do_simulate` function.
     pub fn do_simulate_raw(
         &self,
         raw_unsigned_tx: &[u8],
@@ -490,6 +502,8 @@ where
         Ok(res.to_json_vec()?)
     }
 
+    /// The `do_query_app_raw` function performs a query on the app's state with the provided raw query request at the specified height.
+    /// It deserializes the raw query request and calls the `do_query_app` function.
     pub fn do_query_app_raw(&self, raw_req: &[u8], height: u64, prove: bool) -> AppResult<Vec<u8>> {
         let req = raw_req.deserialize_json()?;
         let res = self.do_query_app(req, height, prove)?;
@@ -498,6 +512,11 @@ where
     }
 }
 
+/// The `process_tx` function processes a transaction by performing the following steps:
+/// 1. `withhold_fee`, where the taxman makes sure the sender has sufficient tokens to cover the tx fee;
+/// 2. `authenticate`, where the sender account authenticates the transaction;
+/// 3. Process the messages and call the sender account's `backrun` method;
+/// 4. `finalize_fee`, where the taxman finalizes the fee for the transaction.
 fn process_tx<S, VM>(vm: VM, storage: S, block: BlockInfo, tx: Tx, mode: AuthMode) -> TxOutcome
 where
     S: Storage + Clone + 'static,
@@ -633,6 +652,7 @@ where
     process_finalize_fee(vm, buffer1, gas_tracker, block, tx, mode, events, Ok(()))
 }
 
+/// The `process_msgs_then_backrun` function processes the messages in the transaction and calls the sender account's `backrun` method if requested.
 #[inline]
 fn process_msgs_then_backrun<S, VM>(
     vm: VM,
@@ -679,6 +699,7 @@ where
     Ok(msg_events)
 }
 
+/// The `process_finalize_fee` function finalizes the fee for the transaction by calling the taxman's `finalize_fee` function.
 fn process_finalize_fee<S, VM>(
     vm: VM,
     buffer: Shared<Buffer<S>>,
@@ -718,6 +739,7 @@ where
     }
 }
 
+/// The `process_msg` function processes a single message in the transaction.
 pub fn process_msg<VM>(
     vm: VM,
     mut storage: Box<dyn Storage>,
@@ -802,6 +824,7 @@ where
     }
 }
 
+/// The `process_query` function processes a query on the app's state.
 pub fn process_query<VM>(
     vm: VM,
     storage: Box<dyn Storage>,
@@ -908,6 +931,7 @@ where
     }
 }
 
+/// The `has_permission` function checks if the sender has the specified permission.
 pub(crate) fn has_permission(permission: &Permission, owner: Addr, sender: Addr) -> bool {
     // The genesis sender can always store code and instantiate contracts.
     if sender == GENESIS_SENDER {
@@ -926,6 +950,7 @@ pub(crate) fn has_permission(permission: &Permission, owner: Addr, sender: Addr)
     }
 }
 
+/// The `schedule_cronjob` function schedules a cronjob for the specified contract at the specified time.
 pub(crate) fn schedule_cronjob(
     storage: &mut dyn Storage,
     contract: Addr,
@@ -944,6 +969,7 @@ pub(crate) fn schedule_cronjob(
     NEXT_CRONJOBS.insert(storage, (next_time, contract))
 }
 
+/// The `new_outcome` function creates a new `Outcome` with the specified gas tracker and result.
 fn new_outcome(gas_tracker: GasTracker, result: AppResult<Vec<Event>>) -> Outcome {
     Outcome {
         gas_limit: gas_tracker.limit(),
@@ -952,6 +978,7 @@ fn new_outcome(gas_tracker: GasTracker, result: AppResult<Vec<Event>>) -> Outcom
     }
 }
 
+/// The `new_tx_outcome` function creates a new `TxOutcome` with the specified gas tracker, events, and result.
 fn new_tx_outcome(gas_tracker: GasTracker, events: Vec<Event>, result: AppResult<()>) -> TxOutcome {
     TxOutcome {
         gas_limit: gas_tracker.limit().unwrap(),
@@ -962,6 +989,7 @@ fn new_tx_outcome(gas_tracker: GasTracker, events: Vec<Event>, result: AppResult
 }
 
 #[cfg(feature = "tracing")]
+/// The `into_utc_string` function converts a `Timestamp` into a UTC string.
 pub fn into_utc_string(timestamp: Timestamp) -> String {
     // This panics if the timestamp (as nanoseconds) overflows `i64` range.
     // But that'd be 500 years or so from now...

@@ -13,6 +13,7 @@ use {
     },
 };
 
+/// The `instantiate` function initializes the AMM contract with the provided configuration.
 #[cfg_attr(not(feature = "library"), grug::export)]
 pub fn instantiate(ctx: MutableCtx, msg: InstantiateMsg) -> StdResult<Response> {
     CONFIG.save(ctx.storage, &msg.config)?;
@@ -20,6 +21,7 @@ pub fn instantiate(ctx: MutableCtx, msg: InstantiateMsg) -> StdResult<Response> 
     Ok(Response::new())
 }
 
+/// The `execute` function handles various AMM-related operations, such as creating pools, swapping, providing liquidity, and withdrawing liquidity.
 #[cfg_attr(not(feature = "library"), grug::export)]
 pub fn execute(ctx: MutableCtx, msg: ExecuteMsg) -> anyhow::Result<Response> {
     match msg {
@@ -36,6 +38,8 @@ pub fn execute(ctx: MutableCtx, msg: ExecuteMsg) -> anyhow::Result<Response> {
     }
 }
 
+/// The `create_pool` function creates a new liquidity pool with the provided parameters.
+/// It deducts the pool creation fee from the deposit, initializes the pool, and mints liquidity tokens.
 fn create_pool(ctx: MutableCtx, params: PoolParams) -> anyhow::Result<Response> {
     let amm_cfg = CONFIG.load(ctx.storage)?;
     let mut liquidity = ctx.funds.clone();
@@ -110,6 +114,8 @@ fn create_pool(ctx: MutableCtx, params: PoolParams) -> anyhow::Result<Response> 
         )?))
 }
 
+/// The `swap` function performs a swap operation along the specified route of pools.
+/// It ensures the minimum output is met and transfers the protocol fee and swap output to the appropriate recipients.
 fn swap(
     ctx: MutableCtx,
     route: UniqueVec<PoolId>,
@@ -147,6 +153,8 @@ fn swap(
         .add_message(Message::transfer(cfg.fee_recipient, outcome.protocol_fee)?))
 }
 
+/// The `provide_liquidity` function allows users to provide liquidity to a specified pool.
+/// It ensures the minimum output is met and mints liquidity tokens for the user.
 fn provide_liquidity(
     mut ctx: MutableCtx,
     pool_id: PoolId,
@@ -189,6 +197,8 @@ fn provide_liquidity(
     )?))
 }
 
+/// The `withdraw_liquidity` function allows users to withdraw liquidity from a specified pool.
+/// It burns the liquidity tokens and transfers the corresponding refunds to the user.
 fn withdraw_liquidity(ctx: MutableCtx, pool_id: PoolId) -> anyhow::Result<Response> {
     let denom = denom_of(pool_id)?;
     let coin_to_burn = ctx.funds.into_one_coin()?;
