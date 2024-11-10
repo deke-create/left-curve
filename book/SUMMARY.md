@@ -6,6 +6,7 @@
 
 - [Math](guides/math.md)
 - [Indexed map](guides/indexed-map.md)
+- [Getting Started](guides/getting-started.md)
 
 ---
 
