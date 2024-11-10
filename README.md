@@ -34,6 +34,8 @@ We use [VS Code](https://code.visualstudio.com/) as text editor with the followi
 - [Todo Tree](https://marketplace.visualstudio.com/items?itemName=Gruntfuggly.todo-tree)
 - [Trailing Spaces](https://marketplace.visualstudio.com/items?itemName=shardulm94.trailing-spaces)
 
+For a detailed guide on getting started with Grug, please refer to the [Getting Started with Grug](book/guides/getting-started.md) guide.
+
 ### Rust
 
 Install the `grug` command line software:
