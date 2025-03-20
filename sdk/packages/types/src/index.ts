@@ -14,7 +14,11 @@ export type {
   QuerySupplyRequest,
   QueryRequest,
   QueryResponse,
-  QuerySuppliesReuest,
+  QuerySuppliesRequest,
+  CodeResponse,
+  CodesResponse,
+  QueryAppConfigRequest,
+  QueryAppConfigsRequest,
   QueryWasmRawRequest,
   QueryWasmSmartRequest,
   WasmRawResponse,
@@ -23,9 +27,8 @@ export type {
   SimulateResponse,
   ContractResponse,
   ContractsResponse,
-  AppConfigsResponse,
   AppConfigResponse,
-} from "./queries";
+} from "./queries.js";
 
 export type {
   Message,
@@ -34,11 +37,11 @@ export type {
   MsgMigrate,
   MsgStoreCode,
   MsgTransfer,
-  MsgUpdateConfig,
+  MsgConfigure,
   Tx,
   TxParameters,
   UnsignedTx,
-} from "./tx";
+} from "./tx.js";
 
 export type {
   Proof,
@@ -47,17 +50,17 @@ export type {
   MembershipProof,
   Node,
   NonMembershipProof,
-} from "./proof";
+} from "./proof.js";
 
 export type {
   Transport,
   TransportConfig,
-} from "./transports";
+} from "./transports.js";
 
 export type {
   ChainId,
   Chain,
-} from "./chain";
+} from "./chain.js";
 
 export type {
   User,
@@ -70,12 +73,13 @@ export type {
   AccountParams,
   AccountMultiConfig,
   AccountSingleConfig,
-} from "./account";
+} from "./account.js";
 
 export type {
   Key,
   KeyHash,
-} from "./key";
+  KeyAlgoType,
+} from "./key.js";
 
 export type {
   EventMap,
@@ -83,7 +87,12 @@ export type {
   EventFn,
   EventData,
   Emitter,
-} from "./emitter";
+} from "./emitter.js";
+
+export type {
+  Code,
+  CodeStatus,
+} from "./code.js";
 
 export type {
   Coin,
@@ -97,18 +106,20 @@ export type {
   NativeCoin,
   ContractCoin,
   CoinGeckoId,
-} from "./coin";
+} from "./coin.js";
 
 export type {
   ClientConfig,
   ClientExtend,
   Client,
-} from "./client";
+} from "./client.js";
 
 export type {
   Credential,
   Metadata,
-} from "./credential";
+  Eip712Credential,
+  PasskeyCredential,
+} from "./credential.js";
 
 export type {
   Connection,
@@ -119,14 +130,13 @@ export type {
   ConnectorParameter,
   ConnectorEventMap,
   CreateConnectorFn,
-  ConnectorStatusType,
-} from "./connector";
+} from "./connector.js";
 
 export type {
   AbstractStorage,
   CreateStorageParameters,
   Storage,
-} from "./storage";
+} from "./storage.js";
 
 export type {
   State,
@@ -134,30 +144,46 @@ export type {
   StoreApi,
   CreateConfigParameters,
   ConfigParameter,
-} from "./config";
+  ConnectionStatusType,
+} from "./config.js";
 
-export type { Address } from "./address";
+export type { Address } from "./address.js";
 
-export type { Signer } from "./signer";
+export type { Signer } from "./signer.js";
 
-export type { EIP1193Provider } from "./eip1193";
+export type { EIP1193Provider } from "./eip1193.js";
+
+export type {
+  EIP6963ProviderDetail,
+  EIP6963ProviderInfo,
+  EIP6963RequestProviderEvent,
+  EIP6963AnnounceProviderEvent,
+} from "./eip6963.js";
+
+export {
+  MipdStore,
+  MipdStoreListener,
+} from "./mipd.js";
 
 export type {
   Signature,
   SignDoc,
   SignedDoc,
   EthPersonalMessage,
-} from "./signature";
+} from "./signature.js";
 
 export type {
-  MessageTypedDataType,
-  TxTypedDataType,
-  TypedDataTypes,
-  TypedDataProperties,
+  DomainType,
+  TxMessageType,
+  MessageType,
+  SolidityTypes,
+  TypedDataProperty,
   TypedDataParameter,
-  TxMessageTypedDataType,
   TypedData,
-} from "./typedData";
+  EIP712Types,
+  EIP712Domain,
+  EIP712Message,
+} from "./typedData.js";
 
 export type {
   Json,
@@ -165,7 +191,7 @@ export type {
   Base64,
   Binary,
   JsonValue,
-} from "./encoding";
+} from "./encoding.js";
 
 export type {
   Prettify,
@@ -177,7 +203,8 @@ export type {
   RemoveUndefined,
   StrictOmit,
   UnionStrictOmit,
-} from "./utils";
+  MaybePromise,
+} from "./utils.js";
 
 export type {
   ProposalId,
@@ -185,13 +212,39 @@ export type {
   ProposalStatus,
   Power,
   Safe,
-} from "./safe";
+} from "./safe.js";
+
+export type {
+  Pool,
+  PoolId,
+  PoolInfo,
+  PoolTypes,
+  PoolParams,
+  XykPool,
+  XykParams,
+  ConcentratedPool,
+  ConcentratedParams,
+  FeeRate,
+} from "./pool.js";
+
+export type {
+  AmmConfig,
+  AmmQueryMsg,
+  AmmExecuteMsg,
+  SwapOutcome,
+} from "./amm.js";
+
+export type {
+  TokenFactoryConfig,
+  TokenFactoryQueryMsg,
+  TokenFactoryExecuteMsg,
+} from "./token-factory.js";
 
 export type {
   Duration,
   Timestamp,
   Language,
-} from "./common";
+} from "./common.js";
 
 export type {
   JsonRpcError,
@@ -207,16 +260,12 @@ export type {
   RequestFnParameters,
   RpcRequestOptions,
   DerivedRpcSchema,
-} from "./rpc";
+} from "./rpc.js";
 
-export {
-  AbciQueryResponse,
-  RpcAbciQueryResponse,
-  RpcTxData,
-  RpcEventAttribute,
-  RpcEvent,
-  RpcBroadcastTxSyncResponse,
-} from "./abci";
+export type {
+  HttpRequestParameters,
+  HttpRpcClientOptions,
+} from "./http.js";
 
 export {
   Block,
@@ -248,10 +297,12 @@ export {
   BlockVersion,
   TxEvent,
   QueryAbciResponse,
-} from "./cometbft";
+} from "./cometbft.js";
 
-export { AccountType } from "./account";
-export { KeyTag } from "./key";
-export { Vote } from "./safe";
+export { AccountType } from "./account.js";
+export { KeyTag, KeyAlgo } from "./key.js";
+export { Vote } from "./safe.js";
+export { PoolType } from "./pool.js";
 
-export { ConnectorTypes, ConnectorStatus, ConnectorIdType } from "./connector";
+export { ConnectorTypes, ConnectorIds } from "./connector.js";
+export { ConnectionStatus } from "./config.js";

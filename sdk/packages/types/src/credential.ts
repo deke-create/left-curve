@@ -1,6 +1,6 @@
-import type { Username } from "./account";
-import type { Base64 } from "./encoding";
-import type { KeyHash } from "./key";
+import type { Username } from "./account.js";
+import type { Base64 } from "./encoding.js";
+import type { KeyHash } from "./key.js";
 
 export type Metadata = {
   /** Identifies which key was used to signed this transaction. */
@@ -17,6 +17,18 @@ export type Credential =
   /** An Ed25519 signature. */
   | { ed25519: Base64 }
   /** An Secp256r1 signature signed by a Passkey, along with necessary metadata. */
-  | { passkey: Base64 }
+  | { passkey: PasskeyCredential }
   /** An EVM signature signed by a wallet, along with its typedata. */
-  | { ethWallet: Base64 };
+  | { eip712: Eip712Credential };
+
+export type PasskeyCredential = {
+  sig: Base64;
+  client_data: Base64;
+  authenticator_data: Base64;
+};
+
+export type Eip712Credential = {
+  sig: Base64;
+  /** The EIP712 typed data object containing types, domain and the message. */
+  typed_data: Base64;
+};

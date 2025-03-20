@@ -1,14 +1,14 @@
-import { http, createUserClient } from "@leftcurve/sdk";
-import { safeActions } from "@leftcurve/sdk/actions";
-import { localhost } from "@leftcurve/sdk/chains";
-import { PrivateKeySigner } from "@leftcurve/sdk/signers";
+import { http, createSignerClient } from "@left-curve/sdk";
+import { safeActions } from "@left-curve/sdk/actions";
+import { devnet } from "@left-curve/sdk/chains";
+import { PrivateKeySigner } from "@left-curve/sdk/signers";
 
 async function execute() {
-  const client = createUserClient({
-    chain: localhost, // Its optional
+  const client = createSignerClient({
+    chain: devnet, // Its optional
     username: "owner",
     signer: PrivateKeySigner.fromRandomKey(),
-    transport: http("http://localhost:26657"),
+    transport: http(devnet.rpcUrls.default.http.at(0)),
   }).extend(safeActions);
 
   const proposal = client.safeAccountGetProposal({

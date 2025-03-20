@@ -1,4 +1,4 @@
-import config from "@leftcurve/config/tsup/common.json" with { type: "json" };
+import config from "@left-curve/config/tsup/common.json" with { type: "json" };
 import { type Options, defineConfig } from "tsup";
 
 /**
@@ -15,6 +15,7 @@ export default defineConfig([
     external: ["react", "react-dom", "@tanstack/react-query"],
     platform: "browser",
     publicDir: "./public",
+    outExtension: ({ format }) => (format === "cjs" ? { js: ".cjs" } : { js: ".js" }),
     esbuildOptions(options) {
       options.banner = {
         js: "'use client'",

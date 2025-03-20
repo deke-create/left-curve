@@ -3,14 +3,14 @@ import type React from "react";
 
 import { type PropsWithChildren, useState } from "react";
 
-import { useConnectors } from "@leftcurve/react";
-import { Button, CloseIcon } from "~/components";
-import { useWizard } from "~/providers";
-import { twMerge } from "~/utils";
+import { useConnectors } from "@left-curve/react";
+import { Button, CloseIcon } from "../../";
+import { useWizard } from "../../../providers";
+import { twMerge } from "../../../utils";
 
 import { DisplayConnectors } from "./DisplayConnectors";
 
-import type { Connector } from "@leftcurve/types";
+import type { Connector } from "@left-curve/types";
 
 export const WrapperConnect: React.FC<PropsWithChildren> = ({ children }) => {
   const [connector, setConnector] = useState<Connector | undefined>();
@@ -26,7 +26,7 @@ export const WrapperConnect: React.FC<PropsWithChildren> = ({ children }) => {
   return (
     <div
       className={twMerge(
-        "flex flex-col items-start justify-center w-full bg-white min-h-[35rem] rounded-3xl relative transition-all h-fit",
+        "flex flex-col items-start justify-center w-full bg-surface-rose-200 min-h-[35rem] rounded-3xl relative transition-all h-fit",
         activeStep === 2 ? "md:max-w-[33rem] min-h-[25rem]" : "md:max-w-[50rem] min-h-[35rem]",
       )}
     >

@@ -1,7 +1,7 @@
 use {
     grug_math::{NumberConst, Uint128},
     grug_testing::TestBuilder,
-    grug_types::{Coins, Empty, Message, ResultExt, TxOutcome},
+    grug_types::{Coins, Empty, Message, ResultExt},
     grug_vm_rust::ContractBuilder,
     test_case::test_case,
 };
@@ -29,7 +29,7 @@ mod taxman {
     }
 
     pub fn withhold_fee(ctx: AuthCtx, tx: Tx) -> StdResult<Response> {
-        let cfg = ctx.querier.query_config()?;
+        let bank = ctx.querier.query_bank()?;
 
         // In simulation mode, don't do anything.
         if ctx.mode == AuthMode::Simulate {
@@ -40,7 +40,7 @@ mod taxman {
 
         let withhold_msg = if withhold_amount.is_non_zero() {
             Some(Message::execute(
-                cfg.bank,
+                bank,
                 &grug_mock_bank::ExecuteMsg::ForceTransfer {
                     from: tx.sender,
                     to: ctx.contract,
@@ -57,8 +57,6 @@ mod taxman {
     }
 
     pub fn finalize_fee(ctx: AuthCtx, tx: Tx, _outcome: TxOutcome) -> StdResult<Response> {
-        let cfg = ctx.querier.query_config()?;
-
         // In simulation mode, don't do anything.
         if ctx.mode == AuthMode::Simulate {
             return Ok(Response::new());
@@ -71,8 +69,9 @@ mod taxman {
         let refund_amount = withheld_amount.saturating_sub(charge_amount);
 
         let charge_msg = if charge_amount.is_non_zero() {
+            let owner = ctx.querier.query_owner()?;
             Some(Message::transfer(
-                cfg.owner,
+                owner,
                 Coins::one(FEE_DENOM.clone(), charge_amount)?,
             )?)
         } else {
@@ -169,39 +168,32 @@ fn withholding_and_finalizing_fee_works(
     let (mut suite, mut accounts) = TestBuilder::new()
         .set_taxman_code(taxman_code, |_fee_denom, _fee_rate| Empty {})
         .add_account("owner", Coins::new())
-        .unwrap()
         .add_account(
             "sender",
             Coins::one(taxman::FEE_DENOM.clone(), sender_balance_before).unwrap(),
         )
-        .unwrap()
         .add_account("receiver", Coins::new())
-        .unwrap()
         .set_owner("owner")
-        .unwrap()
-        .build()
-        .unwrap();
+        .build();
 
     let to = accounts["receiver"].address;
 
-    let outcome = suite
-        .send_message_with_gas(
-            accounts.get_mut("sender").unwrap(),
-            gas_limit,
-            Message::transfer(
-                to,
-                Coins::one(taxman::FEE_DENOM.clone(), send_amount).unwrap(),
-            )
-            .unwrap(),
+    let outcome = suite.send_message_with_gas(
+        &mut accounts["sender"],
+        gas_limit,
+        Message::transfer(
+            to,
+            Coins::one(taxman::FEE_DENOM.clone(), send_amount).unwrap(),
         )
-        .unwrap();
+        .unwrap(),
+    );
 
     match maybe_err {
         Some(err) => {
-            outcome.result.should_fail_with_error(err);
+            outcome.should_fail_with_error(err);
         },
         None => {
-            outcome.result.should_succeed();
+            outcome.should_succeed();
         },
     }
 
@@ -234,35 +226,32 @@ fn finalizing_fee_erroring() {
     let (mut suite, mut accounts) = TestBuilder::new()
         .set_taxman_code(bugged_taxman_code, |_fee_denom, _fee_rate| Empty {})
         .add_account("owner", Coins::new())
-        .unwrap()
         .add_account(
             "sender",
             Coins::one(taxman::FEE_DENOM.clone(), 30_000).unwrap(),
         )
-        .unwrap()
         .set_owner("owner")
-        .unwrap()
-        .build()
-        .unwrap();
+        .build();
 
     let to = accounts["sender"].address;
 
     // Send a transaction with a single message.
     // `withhold_fee` must pass, which should be the case as we're requesting
     // zero gas limit.
-    let TxOutcome { events, result, .. } = suite
-        .send_message_with_gas(
-            accounts.get_mut("sender").unwrap(),
-            0,
-            Message::transfer(to, Coins::new()).unwrap(),
-        )
-        .unwrap();
+    let outcome = suite.send_message_with_gas(
+        &mut accounts["sender"],
+        2000,
+        Message::transfer(to, Coins::new()).unwrap(),
+    );
 
     // Result should be an error.
-    result.should_fail_with_error("division by zero: 1 / 0");
+    let failing = outcome.should_fail_with_error("division by zero: 1 / 0");
 
     // All events should have been discarded.
-    assert!(events.is_empty());
+    assert!(failing.events.withhold.maybe_error().is_some());
+    assert!(failing.events.authenticate.maybe_error().is_some());
+    assert!(failing.events.msgs_and_backrun.maybe_error().is_some());
+    assert!(failing.events.withhold.maybe_error().is_some());
 
     // Owner and sender's balances shouldn't have changed, since state changes
     // are discarded.

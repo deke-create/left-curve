@@ -1,7 +1,7 @@
 use {
-    crate::{account_factory::Username, ChangeSet},
+    crate::account_factory::Username,
     anyhow::anyhow,
-    grug::{Duration, Inner, Message, NonZero, Timestamp},
+    grug::{ChangeSet, Duration, Inner, Message, NonZero, Timestamp},
     std::collections::BTreeMap,
 };
 
@@ -155,9 +155,9 @@ pub enum ExecuteMsg {
 // account factory for this instead.
 #[grug::derive(Serde, QueryRequest)]
 pub enum QueryMsg {
-    /// Query the account's current sequence number.
+    /// Query the account's current nonce number.
     #[returns(u32)]
-    Sequence {},
+    Nonce {},
     /// Query a proposal by ID.
     #[returns(Proposal)]
     Proposal { proposal_id: ProposalId },

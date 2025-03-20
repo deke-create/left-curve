@@ -1,6 +1,6 @@
-import type { Config, ConfigParameter, Prettify } from "@leftcurve/types";
-import { type QueryParameter, type UseQueryReturnType, useQuery } from "../query";
-import { useConfig } from "./useConfig";
+import type { Config, ConfigParameter, Prettify } from "@left-curve/types";
+import { type QueryParameter, type UseQueryReturnType, useQuery } from "../query.js";
+import { useConfig } from "./useConfig.js";
 
 import {
   type GetBalancesData,
@@ -9,7 +9,7 @@ import {
   type GetBalancesQueryFnData,
   type GetBalancesQueryKey,
   getBalancesQueryOptions,
-} from "@leftcurve/connect-kit/handlers";
+} from "@left-curve/connect-kit/handlers";
 
 export type UseBalancesParameters<
   config extends Config = Config,
@@ -30,7 +30,7 @@ export function useBalances(
 ): UseBalancesReturnType {
   const { query = {}, address } = parameters;
 
-  const config = useConfig(parameters);
+  const config = useConfig({ config: parameters.config });
   const options = getBalancesQueryOptions(config, {
     ...parameters,
     address: address as `0x${string}`,

@@ -1,21 +1,23 @@
-import { ethHashMessage, recoverPublicKey } from "@leftcurve/crypto";
-import { encodeBase64, encodeHex, serialize } from "@leftcurve/encoding";
-import { createKeyHash, createUserClient } from "@leftcurve/sdk";
-import { getAccountsByUsername, getKeysByUsername } from "@leftcurve/sdk/actions";
-import { composeAndHashTypedData } from "@leftcurve/utils";
-import { createConnector } from "./createConnector";
+import { ethHashMessage, secp256k1RecoverPubKey } from "@left-curve/crypto";
+import { decodeHex, encodeBase64, encodeHex, encodeUtf8 } from "@left-curve/encoding";
+import { createKeyHash, createSignerClient } from "@left-curve/sdk";
+import { getAccountsByUsername, getKeysByUsername } from "@left-curve/sdk/actions";
+import { KeyAlgo } from "@left-curve/types";
+import { composeTypedData, getRootDomain, hashTypedData } from "@left-curve/utils";
+import { createConnector } from "./createConnector.js";
 
 import type {
   AccountTypes,
   Address,
   ConnectorId,
   EIP1193Provider,
+  Eip712Credential,
   Transport,
-} from "@leftcurve/types";
+} from "@left-curve/types";
 
-import "@leftcurve/types/window";
-import type { UserClient } from "@leftcurve/sdk/clients";
-import { ConnectorSigner } from "@leftcurve/sdk/signers";
+import "@left-curve/types/window";
+import type { SignerClient } from "@left-curve/sdk/clients";
+import { ConnectorSigner } from "@left-curve/sdk/signers";
 
 type EIP1193ConnectorParameters = {
   id: ConnectorId;
@@ -27,7 +29,7 @@ type EIP1193ConnectorParameters = {
 export function eip1193(parameters: EIP1193ConnectorParameters) {
   let _transport: Transport;
   let _username: string;
-  let _client: UserClient;
+  let _client: SignerClient;
   let _isAuthorized = false;
 
   const {
@@ -59,9 +61,9 @@ export function eip1193(parameters: EIP1193ConnectorParameters) {
             params: [challenge, controllerAddress],
           });
 
-          const pubKey = await recoverPublicKey(ethHashMessage(challenge), signature, true);
+          const pubKey = await secp256k1RecoverPubKey(ethHashMessage(challenge), signature, true);
 
-          const keyHash = createKeyHash({ pubKey });
+          const keyHash = createKeyHash({ pubKey, keyAlgo: KeyAlgo.Secp256k1 });
           const keys = await getKeysByUsername(client, { username });
 
           if (!keys[keyHash]) throw new Error("Not authorized");
@@ -76,7 +78,7 @@ export function eip1193(parameters: EIP1193ConnectorParameters) {
       },
       async getClient() {
         if (!_client) {
-          _client = createUserClient({
+          _client = createSignerClient({
             transport: _transport,
             signer: new ConnectorSigner(this),
             username: _username,
@@ -94,9 +96,9 @@ export function eip1193(parameters: EIP1193ConnectorParameters) {
           params: [challenge, controllerAddress],
         });
 
-        const pubKey = await recoverPublicKey(ethHashMessage(challenge), signature, true);
+        const pubKey = await secp256k1RecoverPubKey(ethHashMessage(challenge), signature, true);
 
-        return createKeyHash({ pubKey });
+        return createKeyHash({ pubKey, keyAlgo: KeyAlgo.Secp256k1 });
       },
       async getProvider() {
         const provider = _provider_();
@@ -122,26 +124,44 @@ export function eip1193(parameters: EIP1193ConnectorParameters) {
         return _isAuthorized;
       },
       async requestSignature(signDoc) {
-        const { typedData, ...txMessage } = signDoc;
-        const provider = await this.getProvider();
-        const [controllerAddress] = await provider.request({ method: "eth_requestAccounts" });
+        try {
+          const { typedData: types, sender, ...txMessage } = signDoc;
+          const provider = await this.getProvider();
+          const [controllerAddress] = await provider.request({ method: "eth_requestAccounts" });
 
-        if (!typedData) throw new Error("Typed data required");
-        const hashTypedData = composeAndHashTypedData(txMessage, typedData);
+          if (!types) throw new Error("Typed data required");
 
-        const signature = await provider.request({
-          method: "eth_signTypedData_v4",
-          params: [controllerAddress, hashTypedData],
-        });
+          const domain = {
+            name: getRootDomain(window.location.hostname),
+            verifyingContract: sender,
+          };
 
-        const ethWalletCredential = serialize({ signature, typedData: hashTypedData.substring(2) });
-        const credential = { ethWallet: encodeBase64(ethWalletCredential) };
+          const typedData = composeTypedData(txMessage, domain, types);
+          const hashData = await hashTypedData(typedData);
+          const signData = JSON.stringify(typedData);
 
-        const keyHash = createKeyHash({
-          pubKey: await recoverPublicKey(hashTypedData.substring(2), signature, true),
-        });
+          const signature = await provider.request({
+            method: "eth_signTypedData_v4",
+            params: [controllerAddress, signData],
+          });
 
-        return { credential, keyHash, signDoc };
+          const eip712: Eip712Credential = {
+            sig: encodeBase64(decodeHex(signature.slice(2).substring(0, 128))),
+            typed_data: encodeBase64(encodeUtf8(signData)),
+          };
+
+          const credential = { eip712 };
+
+          const keyHash = createKeyHash({
+            pubKey: await secp256k1RecoverPubKey(hashData, signature, true),
+            keyAlgo: KeyAlgo.Secp256k1,
+          });
+
+          return { credential, keyHash, signDoc };
+        } catch (error) {
+          console.error(error);
+          throw error;
+        }
       },
       onConnect({ chainId, username }) {
         _username = username;

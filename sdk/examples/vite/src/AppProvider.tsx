@@ -1,18 +1,16 @@
-import { GrunnectProvider as Provider } from "@leftcurve/react";
+import { http, GrunnectProvider, createConfig, passkey } from "@left-curve/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { PropsWithChildren } from "react";
 
-import { http, createConfig, eip1193, passkey } from "@leftcurve/connect-kit";
-import { localhost } from "@leftcurve/connect-kit/chains";
-import "@leftcurve/types/window";
+import { devnet } from "@left-curve/react/chains";
 
 export const config = createConfig({
-  chains: [localhost],
+  chains: [devnet],
   transports: {
-    [localhost.id]: http("http://localhost:26657", { batch: true }),
+    [devnet.id]: http(devnet.rpcUrls.default.http.at(0), { batch: true }),
   },
   coins: {
-    [localhost.id]: {
+    [devnet.id]: {
       uusdc: {
         type: "native",
         name: "USD Circle",
@@ -25,24 +23,14 @@ export const config = createConfig({
       },
     },
   },
-  connectors: [
-    eip1193({
-      id: "metamask",
-      name: "Metamask",
-    }),
-    eip1193({
-      id: "keplr",
-      name: "Keplr",
-      provider: () => window.keplr?.ethereum,
-    }),
-    passkey(),
-  ],
+  connectors: [passkey()],
 });
 
 export const AppProvider: React.FC<PropsWithChildren> = ({ children }) => {
   return (
-    <Provider config={config}>
+    <GrunnectProvider config={config}>
+      {/* "@tanstack/react-query" is required in combination with GrunnectProvider */}
       <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>
-    </Provider>
+    </GrunnectProvider>
   );
 };

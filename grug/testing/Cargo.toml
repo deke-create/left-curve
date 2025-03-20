@@ -1,16 +1,16 @@
 [package]
-name          = "grug-testing"
-version       = { workspace = true }
 authors       = { workspace = true }
-edition       = { workspace = true }
-rust-version  = { workspace = true }
-documentation = { workspace = true }
-repository    = { workspace = true }
-license       = { workspace = true }
 categories    = { workspace = true }
+documentation = { workspace = true }
+edition       = { workspace = true }
+license       = { workspace = true }
+name          = "grug-testing"
+repository    = { workspace = true }
+rust-version  = { workspace = true }
+version       = { workspace = true }
 
 [dependencies]
-anyhow             = { workspace = true }
+assertor           = { workspace = true }
 grug-app           = { workspace = true, features = ["tracing"] }
 grug-crypto        = { workspace = true }
 grug-db-memory     = { workspace = true }
@@ -20,13 +20,18 @@ grug-mock-bank     = { workspace = true, features = ["library"] }
 grug-mock-taxman   = { workspace = true, features = ["library"] }
 grug-types         = { workspace = true }
 grug-vm-rust       = { workspace = true }
+indexer-sql        = { workspace = true, features = ["tracing"] }
 k256               = { workspace = true }
 rand               = { workspace = true }
+sea-orm            = { workspace = true }
 serde              = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
-borsh        = { workspace = true, features = ["derive", "de_strict_order"] }
+borsh        = { workspace = true, features = ["de_strict_order", "derive"] }
 grug-storage = { workspace = true }
+prost        = { workspace = true }
+reqwest      = { workspace = true, features = ["blocking", "json"] }
 test-case    = { workspace = true }
+thiserror    = { workspace = true }

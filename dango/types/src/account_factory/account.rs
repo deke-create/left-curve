@@ -1,11 +1,8 @@
 use {
     crate::account::{multi, single},
-    grug::{PrimaryKey, StdError, StdResult},
+    grug::{PrimaryKey, RawKey, StdError, StdResult},
     paste::paste,
-    std::{
-        borrow::Cow,
-        fmt::{self, Display},
-    },
+    std::fmt::{self, Display},
 };
 
 // ----------------------------------- index -----------------------------------
@@ -23,6 +20,15 @@ pub type AccountIndex = u32;
 pub struct Account {
     pub index: AccountIndex,
     pub params: AccountParams,
+}
+
+impl Account {
+    pub fn is_otp_enabled(&self) -> bool {
+        match &self.params {
+            AccountParams::Spot(params) | AccountParams::Margin(params) => params.is_otp_active,
+            AccountParams::Safe(_) => false,
+        }
+    }
 }
 
 // ---------------------------------- params -----------------------------------
@@ -43,6 +49,10 @@ macro_rules! generate_downcast {
                     AccountParams::$id(value) => value,
                     _ => panic!("AccountParams is not {}", stringify!($id)),
                 }
+            }
+
+            pub fn [<is_$id:snake>](self) -> bool {
+                matches!(self, AccountParams::$id(_))
             }
         }
     };
@@ -94,13 +104,13 @@ impl PrimaryKey for AccountType {
 
     const KEY_ELEMS: u8 = 1;
 
-    fn raw_keys(&self) -> Vec<Cow<[u8]>> {
+    fn raw_keys(&self) -> Vec<RawKey> {
         let index = match self {
             AccountType::Spot => 0,
             AccountType::Margin => 1,
             AccountType::Safe => 2,
         };
-        vec![Cow::Owned(vec![index])]
+        vec![RawKey::Fixed8([index])]
     }
 
     fn from_slice(bytes: &[u8]) -> StdResult<Self::Output> {

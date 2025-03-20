@@ -30,8 +30,8 @@ export type InternalForwardRefRenderFunction<
 > = {
   <AsComponent extends As = Component>(
     props: MergeWithAs<
-      React.ComponentPropsWithoutRef<Component>,
-      Omit<React.ComponentPropsWithoutRef<AsComponent>, OmitKeys>,
+      React.ComponentPropsWithRef<Component>,
+      Omit<React.ComponentPropsWithRef<AsComponent>, OmitKeys>,
       Props,
       AsComponent
     >,
@@ -40,4 +40,9 @@ export type InternalForwardRefRenderFunction<
   defaultProps?: Partial<Props> | undefined;
   propTypes?: React.WeakValidationMap<Props> | undefined;
   displayName?: string | undefined;
+};
+
+export type VisibleRef = {
+  isVisible: boolean;
+  changeVisibility: (isVisible: boolean) => void;
 };

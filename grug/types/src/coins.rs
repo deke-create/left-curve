@@ -10,7 +10,15 @@ use {
     },
 };
 
-// something = something.checked_add
+/// Build a [`Coins`](crate::Coins) with the given denoms and amounts.
+///
+/// Panic if input is invalid, e.g. invalid denom or zero amount(s).
+#[macro_export]
+macro_rules! coins {
+    ($($denom:expr => $amount:expr),* $(,)?) => {{
+        Coins::try_from($crate::btree_map! { $($denom => $amount),+ }).unwrap()
+    }};
+}
 
 /// A sorted list of coins or tokens.
 #[derive(
@@ -106,6 +114,18 @@ impl Coins {
         Ok(CoinRef { denom, amount })
     }
 
+    /// If the `Coins` is exactly one coin, and is of the given denom, return a
+    /// reference to this coin; otherwise throw error.
+    pub fn as_one_coin_of_denom(&self, denom: &Denom) -> StdResult<CoinRef> {
+        let coin = self.as_one_coin()?;
+
+        if coin.denom != denom {
+            return Err(StdError::invalid_payment(denom, coin.denom));
+        }
+
+        Ok(coin)
+    }
+
     /// If the `Coins` is exactly one coin, consume self and return this coin as
     /// an owned value; otherwise throw error.
     pub fn into_one_coin(self) -> StdResult<Coin> {
@@ -116,6 +136,18 @@ impl Coins {
         let (denom, amount) = self.0.into_iter().next().unwrap();
 
         Ok(Coin { denom, amount })
+    }
+
+    /// If the `Coins` is exactly one coin, and is of the given denom, consume
+    /// self and return this coin as an owned value; otherwise throw error.
+    pub fn into_one_coin_of_denom(self, denom: &Denom) -> StdResult<Coin> {
+        let coin = self.into_one_coin()?;
+
+        if coin.denom != *denom {
+            return Err(StdError::invalid_payment(denom, coin.denom));
+        }
+
+        Ok(coin)
     }
 
     /// If the `Coins` is exactly two coins, return these two coins as a tuple,
@@ -183,6 +215,15 @@ impl Coins {
         Ok(())
     }
 
+    /// Insert all coins from another `Coins`.
+    pub fn insert_many(&mut self, coins: Self) -> StdResult<()> {
+        for coin in coins.into_iter() {
+            self.insert(coin)?;
+        }
+
+        Ok(())
+    }
+
     /// Deduct a coin from the `Coins`.
     pub fn deduct(&mut self, coin: Coin) -> StdResult<()> {
         let Some(amount) = self.0.get_mut(&coin.denom) else {
@@ -196,6 +237,44 @@ impl Coins {
         }
 
         Ok(())
+    }
+
+    /// Deduct all coins from another `Coins`.
+    pub fn deduct_many(&mut self, coins: Self) -> StdResult<()> {
+        for coin in coins.into_iter() {
+            self.deduct(coin)?;
+        }
+
+        Ok(())
+    }
+
+    /// Deduct a coin from the `Coins`, saturating at zero. Returns a coin of
+    /// the remainder if the coin's amount is greater than the available amount.
+    pub fn saturating_deduct(&mut self, coin: Coin) -> StdResult<Coin> {
+        let Some(amount) = self.0.get_mut(&coin.denom) else {
+            return Ok(coin);
+        };
+
+        if &coin.amount >= amount {
+            let remainder = coin.amount - *amount;
+            self.0.remove(&coin.denom);
+            return Coin::new(coin.denom.clone(), remainder);
+        }
+
+        self.deduct(coin.clone())?;
+
+        Coin::new(coin.denom, 0)
+    }
+
+    /// Deduct all coins from another `Coins`, saturating at zero. Returns a
+    pub fn saturating_deduct_many(&mut self, coins: Self) -> StdResult<Self> {
+        let mut remainders = Self::new();
+
+        for coin in coins {
+            remainders.insert(self.saturating_deduct(coin)?)?;
+        }
+
+        Ok(remainders)
     }
 
     /// Take a coin of the given denom out of the `Coins`.
@@ -435,18 +514,17 @@ impl fmt::Debug for Coins {
 #[cfg(test)]
 mod tests {
     use {
-        crate::{json, Coins, Json, JsonDeExt, JsonSerExt},
+        crate::{btree_map, json, Coins, Denom, Json, JsonDeExt, JsonSerExt},
         grug_math::Uint128,
         std::str::FromStr,
     };
 
     fn mock_coins() -> Coins {
-        Coins::try_from([
-            ("uatom", Uint128::new(123)),
-            ("umars", Uint128::new(456)),
-            ("uosmo", Uint128::new(789)),
-        ])
-        .unwrap()
+        Coins::new_unchecked(btree_map! {
+            Denom::new_unchecked(["uatom"]) => Uint128::new(123),
+            Denom::new_unchecked(["umars"]) => Uint128::new(456),
+            Denom::new_unchecked(["uosmo"]) => Uint128::new(789),
+        })
     }
 
     fn mock_coins_json() -> Json {
@@ -506,5 +584,43 @@ mod tests {
         // invalid string: contains duplicate
         let s = "uatom:123,uatom:456";
         assert!(Coins::from_str(s).is_err())
+    }
+
+    #[test]
+    fn saturating_deduct_many() {
+        // Deduct less than available
+        let mut coins = mock_coins();
+        let deduct = Coins::new_unchecked(btree_map! {
+            Denom::new_unchecked(["uatom"]) => Uint128::new(100),
+            Denom::new_unchecked(["umars"]) => Uint128::new(100),
+            Denom::new_unchecked(["uosmo"]) => Uint128::new(789),
+        });
+        let remainders = coins.saturating_deduct_many(deduct).unwrap();
+        assert_eq!(remainders, Coins::new());
+
+        // Equal amounts
+        let mut coins = mock_coins();
+        let remainders = coins.saturating_deduct_many(mock_coins()).unwrap();
+        assert_eq!(remainders, Coins::new());
+
+        // Some remainder
+        let extra = Coins::new_unchecked(btree_map! {
+            Denom::new_unchecked(["uatom"]) => Uint128::new(100),
+            Denom::new_unchecked(["umars"]) => Uint128::new(100),
+        });
+        let mut coins = mock_coins();
+        let mut deduct = mock_coins();
+        deduct.insert_many(extra.clone()).unwrap();
+        let remainders = coins.saturating_deduct_many(deduct).unwrap();
+        assert_eq!(remainders, extra);
+
+        // Deduct denom not in coins
+        let mut coins = mock_coins();
+        let deduct = Coins::new_unchecked(btree_map! {
+            Denom::new_unchecked(["uatom"]) => Uint128::new(100),
+            Denom::new_unchecked(["uusdc"]) => Uint128::new(100),
+        });
+        let remainders = coins.saturating_deduct_many(deduct).unwrap();
+        assert_eq!(remainders, Coins::one("uusdc", 100).unwrap());
     }
 }

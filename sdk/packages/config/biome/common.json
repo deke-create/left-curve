@@ -13,8 +13,14 @@
   "linter": {
     "enabled": true,
     "rules": {
+      "correctness": {
+        "useExhaustiveDependencies": "off"
+      },
       "performance": {
         "noDelete": "off"
+      },
+      "complexity": {
+        "noForEach": "off"
       },
       "recommended": true,
       "style": {
@@ -36,6 +42,9 @@
       "include": ["sdk/examples/**", "ui/**"],
       "linter": {
         "rules": {
+          "correctness": {
+            "useExhaustiveDependencies": "off"
+          },
           "a11y": {
             "noSvgWithoutTitle": "off",
             "useKeyWithClickEvents": "off"

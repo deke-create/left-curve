@@ -29,6 +29,10 @@ where
         }
     }
 
+    pub fn storage_key(&self) -> &[u8] {
+        self.item.storage_key()
+    }
+
     /// Load the current counter value.
     pub fn current(&self, storage: &dyn Storage) -> StdResult<T> {
         self.item
@@ -73,7 +77,7 @@ where
         }
     }
 }
-impl<'a, K, T, C> Counters<'a, K, T, C>
+impl<K, T, C> Counters<'_, K, T, C>
 where
     K: PrimaryKey + Copy,
     T: Number + Copy,

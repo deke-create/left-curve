@@ -1,4 +1,3 @@
-import { useAccount } from "@leftcurve/react";
 import {
   AccountInfo,
   SafeMembersTable,
@@ -8,28 +7,29 @@ import {
   Tabs,
 } from "@dango/shared";
 
-import type { AccountType } from "@leftcurve/types";
+import type { Account, AccountType } from "@left-curve/types";
 
-export const ManageSafe: React.FC = () => {
-  const { account } = useAccount<typeof AccountType.Safe>();
-  if (!account) return null;
+interface Props {
+  account: Account;
+}
+
+export const ManageSafe: React.FC<Props> = ({ account }) => {
   return (
     <Tabs
       key="manage-safe-tabs"
-      className="min-h-full w-full flex-1"
-      classNames={{ tabsContainer: "mb-10", contentContainer: "min-h-[60vh]" }}
+      classNames={{ container: "min-h-full w-full flex-1", tabsWrapper: "mb-10" }}
     >
       <Tab key="assets" title="Assets">
         <div className="flex flex-col gap-4 justify-center items-center">
-          <AccountInfo avatarUri="/images/safe-avatar.png" />
-          <SafePortfolioTable />
+          <AccountInfo avatarUri="/images/safe.svg" account={account} />
+          <SafePortfolioTable account={account} />
         </div>
       </Tab>
       <Tab key="proposals" title="Proposals">
         <SafeProposalsTable account={account} />
       </Tab>
       <Tab key="members" title="Members">
-        <SafeMembersTable account={account} />
+        <SafeMembersTable account={account as Account<typeof AccountType.Safe>} />
       </Tab>
     </Tabs>
   );

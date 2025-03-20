@@ -1,9 +1,9 @@
 "use client";
 
 import { useContext } from "react";
-import { GrunnectContext } from "../context";
+import { GrunnectContext } from "../context.js";
 
-import type { Config } from "@leftcurve/types";
+import type { Config } from "@left-curve/types";
 
 export type UseConfigParameters<config extends Config = Config> = { config?: Config | config };
 

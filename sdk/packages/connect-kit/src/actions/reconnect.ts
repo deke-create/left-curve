@@ -1,4 +1,4 @@
-import type { Config } from "@leftcurve/types";
+import { type Config, ConnectionStatus } from "@left-curve/types";
 
 export type ReconnectReturnType = void;
 
@@ -14,7 +14,7 @@ export async function reconnect<config extends Config>(
 
   config.setState((x) => ({
     ...x,
-    status: x.connections.size > 0 ? "reconnecting" : "disconnected",
+    status: x.connections.size > 0 ? ConnectionStatus.Reconnecting : ConnectionStatus.Disconnected,
   }));
 
   const connections = new Map();
@@ -27,9 +27,11 @@ export async function reconnect<config extends Config>(
     account,
   } of config.state.connections.values()) {
     const connector = config.connectors.find(({ id }) => id === _connector_.id);
-    if (!connector) continue;
+    const chain = config.chains.find(({ id }) => id === chainId);
+    if (!connector || !chain) continue;
+
     try {
-      connector.onConnect({ chainId, username });
+      connector.connect({ chainId, username });
       connectors.set(chainId, connector.uid);
       connections.set(connector.uid, {
         account,
@@ -39,14 +41,14 @@ export async function reconnect<config extends Config>(
         username,
       });
     } catch (_) {}
-
-    config.setState((x) => ({
-      ...x,
-      connections,
-      connectors,
-      status: connections.size > 0 ? "connected" : "disconnected",
-    }));
   }
+
+  config.setState((x) => ({
+    ...x,
+    connections,
+    connectors,
+    status: connections.size > 0 ? ConnectionStatus.Connected : ConnectionStatus.Disconnected,
+  }));
 
   isReconnecting = false;
 }

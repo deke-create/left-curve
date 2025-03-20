@@ -1,13 +1,15 @@
-import { useAccount, useBalances } from "@leftcurve/react";
+import { useBalances } from "@left-curve/react";
 import { AssetCard } from "./AssetCard";
 
+import type { Account } from "@left-curve/types";
+
 interface Props {
+  account: Account;
   topComponent?: React.ReactNode;
   bottomComponent?: React.ReactNode;
 }
 
-export const PortfolioTable: React.FC<Props> = ({ topComponent, bottomComponent }) => {
-  const { account } = useAccount();
+export const PortfolioTable: React.FC<Props> = ({ topComponent, bottomComponent, account }) => {
   const { data: balances = {} } = useBalances({ address: account?.address });
 
   return (
@@ -17,8 +19,8 @@ export const PortfolioTable: React.FC<Props> = ({ topComponent, bottomComponent 
       <div className="flex flex-col gap-1">
         <div className="grid grid-cols-[1fr_100px_100px] px-2 text-sm font-extrabold text-sand-800/50 font-diatype-rounded mx-2 tracking-widest uppercase">
           <p>Assets</p>
-          <p>Deposited</p>
-          <p className="w-full text-end">Amount</p>
+          <p>Quantity</p>
+          <p className="w-full text-end">Value</p>
         </div>
         {Object.entries(balances).map(([denom, amount]) => (
           <AssetCard key={denom} coin={{ denom, amount }} />

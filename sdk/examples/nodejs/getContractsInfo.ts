@@ -1,11 +1,11 @@
-import { http, createPublicClient } from "@leftcurve/sdk";
-import { localhost } from "@leftcurve/sdk/chains";
-import type { Address } from "@leftcurve/types";
+import { http, createPublicClient } from "@left-curve/sdk";
+import { devnet } from "@left-curve/sdk/chains";
+import type { Address } from "@left-curve/types";
 
 async function getContractsInfo() {
   const client = createPublicClient({
-    chain: localhost, // Its optional
-    transport: http("http://localhost:26657"),
+    chain: devnet, // Its optional
+    transport: http(devnet.rpcUrls.default.http.at(0)),
   });
 
   const contractsInfo = await client.getContractsInfo();

@@ -3,10 +3,13 @@ pub mod account_factory;
 pub mod amm;
 pub mod auth;
 pub mod bank;
-mod changeset;
 pub mod config;
-pub mod mock_ibc_transfer;
+pub mod ibc;
+pub mod lending;
+pub mod oracle;
+mod querier;
 pub mod taxman;
 pub mod token_factory;
+pub mod vesting;
 
-pub use changeset::*;
+pub use querier::DangoQuerier;

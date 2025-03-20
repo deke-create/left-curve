@@ -1,60 +1,82 @@
 use {
+    crate::{create_signature, TestSuite},
     dango_types::{
-        account_factory::{NewUserSalt, Username},
-        auth::{Credential, Key, Metadata, SignDoc},
+        account::single,
+        account_factory::{
+            self, AccountParams, AccountType, NewUserSalt, QueryCodeHashRequest,
+            QueryNextAccountIndexRequest, Salt, Username,
+        },
+        auth::{Credential, Key, Metadata, SignDoc, Signature, StandardCredential},
     },
     grug::{
-        Addr, Addressable, Defined, Hash160, Hash256, HashExt, Json, JsonSerExt, MaybeDefined,
-        Message, Signer, StdResult, Tx, Undefined,
+        btree_map, Addr, Addressable, Coins, Defined, Hash256, HashExt, Json, JsonSerExt,
+        MaybeDefined, Message, NonEmpty, ResultExt, Signer, StdResult, Tx, Undefined, UnsignedTx,
     },
-    k256::{
-        ecdsa::{signature::Signer as SignerTrait, Signature, SigningKey},
-        elliptic_curve::rand_core::OsRng,
-    },
+    grug_app::{AppError, ProposalPreparer},
+    k256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng},
     std::{collections::BTreeMap, str::FromStr},
 };
 
-pub struct Accounts {
+/// Accounts available for testing purposes.
+pub struct TestAccounts {
     pub owner: TestAccount,
-    pub fee_recipient: TestAccount,
-    pub relayer: TestAccount,
+    pub user1: TestAccount,
+    pub user2: TestAccount,
+    pub user3: TestAccount,
+    pub user4: TestAccount,
+    pub user5: TestAccount,
+    pub user6: TestAccount,
+    pub user7: TestAccount,
+    pub user8: TestAccount,
+    pub user9: TestAccount,
 }
 
 // ------------------------------- test account --------------------------------
 
 #[derive(Debug)]
-pub struct TestAccount<T: MaybeDefined<Inner = Addr> = Defined<Addr>> {
+pub struct TestAccount<
+    T: MaybeDefined<Addr> = Defined<Addr>,
+    K = BTreeMap<Hash256, (SigningKey, Key)>,
+> {
     pub username: Username,
-    pub key: Key,
-    pub key_hash: Hash160,
-    pub sequence: u32,
-    sk: SigningKey,
+    pub nonce: u32,
+    keys: K,
+    sign_with: Hash256,
     address: T,
 }
 
-impl TestAccount<Undefined<Addr>> {
-    pub fn new_random(username: &str) -> StdResult<Self> {
-        // Generate a random Secp256k1 key pair.
+impl TestAccount<Undefined<Addr>, (SigningKey, Key)> {
+    pub fn new_random(username: &str) -> Self {
         let sk = SigningKey::random(&mut OsRng);
+
+        Self::new(username, sk)
+    }
+
+    pub fn new_from_private_key(username: &str, sk_bytes: [u8; 32]) -> Self {
+        let sk = SigningKey::from_bytes(&sk_bytes.into()).unwrap();
+
+        Self::new(username, sk)
+    }
+
+    fn new(username: &str, sk: SigningKey) -> Self {
+        let username = Username::from_str(username).unwrap();
         let pk = sk
             .verifying_key()
             .to_encoded_point(true)
             .to_bytes()
             .to_vec()
-            .try_into()?;
-
-        let username = Username::from_str(username)?;
+            .try_into()
+            .unwrap();
         let key = Key::Secp256k1(pk);
-        let key_hash = pk.hash160();
+        let key_hash = pk.hash256();
 
-        Ok(Self {
+        Self {
             username,
-            key,
-            key_hash,
-            sequence: 0,
-            sk,
-            address: Undefined::default(),
-        })
+            nonce: 0,
+            address: Undefined::new(),
+            keys: (sk, key),
+            sign_with: key_hash,
+        }
     }
 
     pub fn predict_address(
@@ -62,12 +84,12 @@ impl TestAccount<Undefined<Addr>> {
         factory: Addr,
         spot_code_hash: Hash256,
         new_user_salt: bool,
-    ) -> StdResult<TestAccount> {
+    ) -> TestAccount {
         let salt = if new_user_salt {
             NewUserSalt {
                 username: &self.username,
-                key: self.key,
-                key_hash: self.key_hash,
+                key: self.keys.1,
+                key_hash: self.sign_with,
             }
             .into_bytes()
         } else {
@@ -76,81 +98,201 @@ impl TestAccount<Undefined<Addr>> {
 
         let address = Addr::derive(factory, spot_code_hash, &salt);
 
-        Ok(TestAccount {
+        TestAccount {
             username: self.username,
-            key: self.key,
-            key_hash: self.key_hash,
-            sequence: self.sequence,
-            sk: self.sk,
+            nonce: self.nonce,
             address: Defined::new(address),
-        })
+            keys: btree_map!(self.sign_with => self.keys),
+            sign_with: self.sign_with,
+        }
     }
 
     pub fn set_address(self, addresses: &BTreeMap<Username, Addr>) -> TestAccount {
-        let address = addresses[&self.username];
-
         TestAccount {
+            address: Defined::new(addresses[&self.username]),
             username: self.username,
-            key: self.key,
-            key_hash: self.key_hash,
-            sequence: self.sequence,
-            sk: self.sk,
-            address: Defined::new(address),
+            nonce: self.nonce,
+            keys: btree_map! { self.sign_with => self.keys },
+            sign_with: self.sign_with,
         }
     }
 }
 
 impl<T> TestAccount<T>
 where
-    T: MaybeDefined<Inner = Addr>,
+    T: MaybeDefined<Addr>,
 {
-    pub fn sign_transaction_with_sequence(
-        &self,
-        msgs: Vec<Message>,
-        chain_id: &str,
-        sequence: u32,
-    ) -> StdResult<(Metadata, Credential)> {
-        let sign_bytes = SignDoc {
-            messages: msgs.clone(),
-            chain_id: chain_id.to_string(),
-            sequence,
-        }
-        .to_json_vec()?;
-
-        // This hashes `sign_doc_raw` with SHA2-256. If we eventually choose to
-        // use another hash, it's necessary to update this.
-        let signature: Signature = self.sk.sign(&sign_bytes);
-
-        let data = Metadata {
+    pub fn metadata(&self, chain_id: &str, nonce: u32) -> Metadata {
+        Metadata {
             username: self.username.clone(),
-            key_hash: self.key_hash,
-            sequence,
+            chain_id: chain_id.to_string(),
+            expiry: None,
+            nonce,
+        }
+    }
+
+    pub fn sign_transaction_with_nonce(
+        &self,
+        sender: Addr,
+        msgs: NonEmpty<Vec<Message>>,
+        chain_id: &str,
+        gas_limit: u64,
+        nonce: u32,
+    ) -> StdResult<(Metadata, Credential)> {
+        let data = self.metadata(chain_id, nonce);
+        let sign_doc = SignDoc {
+            sender,
+            gas_limit,
+            messages: msgs.clone(),
+            data: data.clone(),
         };
+        let standard_credential = self.create_standard_credential(&sign_doc.to_json_vec()?);
 
-        let credential = Credential::Secp256k1(signature.to_bytes().to_vec().try_into()?);
+        Ok((data, Credential::Standard(standard_credential)))
+    }
 
-        Ok((data, credential))
+    pub fn create_standard_credential(&self, sign_bytes: &[u8]) -> StandardCredential {
+        let sk = &self.keys.get(&self.sign_with).unwrap().0;
+        let signature = create_signature(sk, sign_bytes);
+
+        StandardCredential {
+            key_hash: self.sign_with,
+            signature: Signature::Secp256k1(signature),
+        }
     }
 }
 
-impl Addressable for TestAccount<Defined<Addr>> {
+impl<T> TestAccount<T>
+where
+    T: MaybeDefined<Addr>,
+    Self: Signer,
+{
+    /// Register a new account with the username and key of this account and returns a new
+    /// `TestAccount` with the new account's address.
+    pub fn register_new_account<PP>(
+        &mut self,
+        test_suite: &mut TestSuite<PP>,
+        factory: Addr,
+        params: AccountParams,
+        funds: Coins,
+    ) -> StdResult<TestAccount>
+    where
+        PP: ProposalPreparer,
+        AppError: From<PP::Error>,
+    {
+        // If registering a single account, ensure the supplied username matches this account's username.
+        let account_type = match &params {
+            AccountParams::Spot(single::Params { owner, .. }) => {
+                assert_eq!(owner, &self.username);
+                AccountType::Spot
+            },
+            AccountParams::Margin(single::Params { owner, .. }) => {
+                assert_eq!(owner, &self.username);
+                AccountType::Margin
+            },
+            AccountParams::Safe(_) => AccountType::Safe,
+        };
+
+        // Derive the new accounts address.
+        let index = test_suite
+            .query_wasm_smart(factory, QueryNextAccountIndexRequest {})
+            .unwrap();
+
+        let code_hash = test_suite
+            .query_wasm_smart(factory, QueryCodeHashRequest { account_type })
+            .should_succeed();
+
+        let address = Addr::derive(factory, code_hash, Salt { index }.into_bytes().as_slice());
+
+        // Create a new account
+        test_suite
+            .execute(
+                &mut *self,
+                factory,
+                &account_factory::ExecuteMsg::RegisterAccount { params },
+                funds,
+            )
+            .should_succeed();
+
+        Ok(TestAccount {
+            username: self.username.clone(),
+            nonce: 0,
+            address: Defined::new(address),
+            keys: self.keys.clone(),
+            sign_with: self.sign_with,
+        })
+    }
+}
+
+impl<T> TestAccount<T, (SigningKey, Key)>
+where
+    T: MaybeDefined<Addr>,
+{
+    pub fn key(&self) -> Key {
+        self.keys.1
+    }
+
+    pub fn key_hash(&self) -> Hash256 {
+        self.sign_with
+    }
+}
+
+impl<T> TestAccount<T>
+where
+    T: MaybeDefined<Addr>,
+{
+    pub fn first_key(&self) -> Key {
+        self.keys.iter().next().unwrap().1 .1
+    }
+
+    pub fn first_key_hash(&self) -> Hash256 {
+        *self.keys.keys().next().unwrap()
+    }
+
+    pub fn keys(&self) -> &BTreeMap<Hash256, (SigningKey, Key)> {
+        &self.keys
+    }
+
+    pub fn sign_with(&self) -> Hash256 {
+        self.sign_with
+    }
+}
+
+impl Addressable for TestAccount {
     fn address(&self) -> Addr {
         *self.address.inner()
     }
 }
 
-impl Signer for TestAccount<Defined<Addr>> {
+impl Signer for TestAccount {
+    fn unsigned_transaction(
+        &self,
+        msgs: NonEmpty<Vec<Message>>,
+        chain_id: &str,
+    ) -> StdResult<UnsignedTx> {
+        Ok(UnsignedTx {
+            sender: self.address(),
+            msgs,
+            data: self.metadata(chain_id, self.nonce).to_json_value()?,
+        })
+    }
+
     fn sign_transaction(
         &mut self,
-        msgs: Vec<Message>,
+        msgs: NonEmpty<Vec<Message>>,
         chain_id: &str,
         gas_limit: u64,
     ) -> StdResult<Tx> {
-        let (data, credential) =
-            self.sign_transaction_with_sequence(msgs.clone(), chain_id, self.sequence)?;
+        let (data, credential) = self.sign_transaction_with_nonce(
+            self.address(),
+            msgs.clone(),
+            chain_id,
+            gas_limit,
+            self.nonce,
+        )?;
 
-        // Increment the internally tracked sequence.
-        self.sequence += 1;
+        // Increment the internally tracked nonce.
+        self.nonce += 1;
 
         Ok(Tx {
             sender: self.address(),
@@ -181,9 +323,21 @@ impl Addressable for Factory {
 }
 
 impl Signer for Factory {
+    fn unsigned_transaction(
+        &self,
+        msgs: NonEmpty<Vec<Message>>,
+        _chain_id: &str,
+    ) -> StdResult<UnsignedTx> {
+        Ok(UnsignedTx {
+            sender: self.address(),
+            msgs,
+            data: Json::null(),
+        })
+    }
+
     fn sign_transaction(
         &mut self,
-        msgs: Vec<Message>,
+        msgs: NonEmpty<Vec<Message>>,
         _chain_id: &str,
         gas_limit: u64,
     ) -> StdResult<Tx> {
@@ -191,8 +345,8 @@ impl Signer for Factory {
             sender: self.address,
             gas_limit,
             msgs,
-            data: Json::Null,
-            credential: Json::Null,
+            data: Json::null(),
+            credential: Json::null(),
         })
     }
 }
@@ -202,15 +356,15 @@ impl Signer for Factory {
 pub struct Safe<'a> {
     address: Addr,
     signer: Option<&'a TestAccount>,
-    sequence: u32,
+    nonce: u32,
 }
 
-impl<'a> Safe<'a> {
+impl Safe<'_> {
     pub fn new(address: Addr) -> Self {
         Self {
             address,
             signer: None,
-            sequence: 0,
+            nonce: 0,
         }
     }
 }
@@ -220,28 +374,49 @@ impl<'a> Safe<'a> {
         self.signer = Some(signer);
         self
     }
+
+    pub fn with_nonce(&mut self, nonce: u32) -> &mut Self {
+        self.nonce = nonce;
+        self
+    }
 }
 
-impl<'a> Addressable for Safe<'a> {
+impl Addressable for Safe<'_> {
     fn address(&self) -> Addr {
         self.address
     }
 }
 
-impl<'a> Signer for Safe<'a> {
+impl Signer for Safe<'_> {
+    fn unsigned_transaction(
+        &self,
+        msgs: NonEmpty<Vec<Message>>,
+        chain_id: &str,
+    ) -> StdResult<UnsignedTx> {
+        self.signer
+            .expect("[Safe]: signer not set")
+            .unsigned_transaction(msgs, chain_id)
+    }
+
     fn sign_transaction(
         &mut self,
-        msgs: Vec<Message>,
+        msgs: NonEmpty<Vec<Message>>,
         chain_id: &str,
         gas_limit: u64,
     ) -> StdResult<Tx> {
         let (data, credential) = self
             .signer
             .expect("[Safe]: signer not set")
-            .sign_transaction_with_sequence(msgs.clone(), chain_id, self.sequence)?;
+            .sign_transaction_with_nonce(
+                self.address(),
+                msgs.clone(),
+                chain_id,
+                gas_limit,
+                self.nonce,
+            )?;
 
-        // Increment the internally tracked sequence.
-        self.sequence += 1;
+        // Increment the internally tracked nonce.
+        self.nonce += 1;
 
         Ok(Tx {
             sender: self.address,

@@ -2,8 +2,8 @@ use {
     dango_account_factory::ACCOUNTS,
     dango_types::{
         account_factory,
-        config::ACCOUNT_FACTORY_KEY,
-        mock_ibc_transfer::{ExecuteMsg, InstantiateMsg},
+        ibc::transfer::{ExecuteMsg, InstantiateMsg},
+        DangoQuerier,
     },
     grug::{Addr, Message, MutableCtx, Response, StdResult},
 };
@@ -21,7 +21,7 @@ pub fn execute(ctx: MutableCtx, msg: ExecuteMsg) -> StdResult<Response> {
 }
 
 fn receive_transfer(ctx: MutableCtx, recipient: Addr) -> StdResult<Response> {
-    let factory = ctx.querier.query_app_config(ACCOUNT_FACTORY_KEY)?;
+    let account_factory = ctx.querier.query_account_factory()?;
 
     // Query the factory to find whether the recipient exists:
     // - if yes, simply send the tokens to the accounts;
@@ -29,11 +29,11 @@ fn receive_transfer(ctx: MutableCtx, recipient: Addr) -> StdResult<Response> {
     // Use a raw instead of smart query to save on gas.
     let msg = if ctx
         .querier
-        .query_wasm_raw(factory, ACCOUNTS.path(recipient))?
+        .query_wasm_raw(account_factory, ACCOUNTS.path(recipient))?
         .is_none()
     {
         Message::execute(
-            factory,
+            account_factory,
             &account_factory::ExecuteMsg::Deposit { recipient },
             ctx.funds,
         )?

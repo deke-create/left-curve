@@ -1,7 +1,10 @@
 {
   "name": "leftcurve-monorepo",
-  "version": "0.1.0",
-  "author": "left-curve software",
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "pnpm": ">=9.0.0",
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "turbo": "turbo",
     "doc": "typedoc",
@@ -15,11 +18,11 @@
     "dev": "turbo dev",
     "dev:pkg": "turbo dev -F=./sdk/packages/**",
     "dev:portal": "turbo dev -F=./sdk/packages/** -F @dango/shared -F @dango/portal",
-    "dev:website": "turbo dev -F=./sdk/packages/** -F @dango/shared -F @dango/website",
+    "dev:website": "turbo dev -F @dango/website",
     "build:pkg": "turbo build -F=./sdk/packages/**",
     "build:graph": "turbo build --graph=build-graph.png",
     "build:portal": "turbo build -F @dango/portal",
-    "build:website": "turbo build -F @dango/website",
+    "build:website": "pnpm -F @dango/website build:cf",
     "example:vite": "pnpm -F example-vite",
     "example:next": "pnpm -F example-nextjs",
     "example:node": "pnpm -F example-nodejs",
@@ -34,20 +37,17 @@
     "storybook": "pnpm shared sb:dev",
     "shared": "pnpm -F shared",
     "website": "pnpm -F website",
-    "portal": "pnpm -F portal"
-  },
-  "engines": {
-    "pnpm": ">=9.0.0",
-    "node": ">=18.0.0"
+    "portal": "pnpm -F portal",
+    "bump": "pnpm -r 'bump'"
   },
   "devDependencies": {
+    "@types/node": "catalog:",
     "@biomejs/biome": "^1.8.3",
     "tsup": "^8.3.0",
     "turbo": "^2.0.11",
     "typedoc": "^0.26.5",
-    "typescript": "^5.6.2"
+    "typescript": "catalog:"
   },
-  "packageManager": "pnpm@9.0.0",
   "pnpm": {
     "peerDependencyRules": {
       "ignoreMissing": [

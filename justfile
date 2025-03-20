@@ -4,7 +4,7 @@ set positional-arguments
 default:
   @just --list
 
-# Delete all git branches except for main
+# Delete all local git branches except for main
 clean-branches:
   git branch | grep -v "main" | xargs git branch -D
 
@@ -19,9 +19,9 @@ docker-create-builder name:
 
 # ------------------------------------ Rust ------------------------------------
 
-# Compile and install the Grug node software
+# Compile and install the Dango node software
 install:
-  cargo install --path grug/cli
+  cargo install --path dango/cli
 
 # Run tests
 test:
@@ -37,13 +37,16 @@ fmt:
 
 # Update wasm artifacts used in tests
 testdata:
-  cp -v artifacts/grug_{mock_*,tester}.wasm grug/vm-wasm/testdata/ && \
-  cp -v artifacts/dango_*.wasm dango/testing/testdata
+  cp -v artifacts/grug_{mock_*,tester}.wasm grug/vm-wasm/testdata/
+
+# Build the Left Curve Book
+book:
+  mdbook build --open
 
 # --------------------------------- Optimizer ----------------------------------
 
 OPTIMIZER_NAME := "leftcurve/optimizer"
-OPTIMIZER_VERSION := "0.1.0"
+OPTIMIZER_VERSION := "0.1.1"
 
 # Build and publish optimizer Docker image
 docker-build-optimizer:
@@ -80,8 +83,12 @@ docker-build-devnet:
 
 # Start a devnet from genesis
 start-devnet:
-  docker run -it -p 26657:26657 -p 26656:26656 {{DEVNET_NAME}}:{{DEVNET_VERSION}}
+  docker run --name {{DEVNET_CHAIN_ID}} -it -p 26657:26657 -p 26656:26656 {{DEVNET_NAME}}:{{DEVNET_VERSION}}
 
 # Restart a devnet that have been previous stopped
-restart-devnet container_id:
-  docker start -i $1
+restart-devnet:
+  docker start -i {{DEVNET_CHAIN_ID}}
+
+# Remove a devnet
+remove-devnet:
+  docker rm -f {{DEVNET_CHAIN_ID}}

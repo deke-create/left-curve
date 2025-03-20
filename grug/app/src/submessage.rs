@@ -1,6 +1,9 @@
 use {
-    crate::{do_reply, process_msg, AppError, AppResult, Buffer, GasTracker, Shared, Vm},
-    grug_types::{Addr, BlockInfo, Event, GenericResult, ReplyOn, Storage, SubMessage},
+    crate::{do_reply, process_msg, AppError, Buffer, EventResult, GasTracker, Shared, Vm},
+    grug_types::{
+        Addr, BlockInfo, EventStatus, GenericResult, HandleEventStatus, ReplyOn, Storage, SubEvent,
+        SubMessage,
+    },
 };
 
 /// Maximum number of chained submessages.
@@ -11,51 +14,73 @@ use {
 /// Without a limit, this can leads to stack overflow which halts the chain.
 const MAX_MESSAGE_DEPTH: usize = 30;
 
+macro_rules! try_add_subevent {
+    ($events: expr, $submsg_event: expr, $reply: expr) => {
+        match $reply {
+            EventResult::Ok(evt_reply) => $events.push(EventStatus::Ok(SubEvent {
+                event: $submsg_event,
+                reply: Some(EventStatus::Ok(evt_reply)),
+            })),
+            EventResult::Err { event, error } => {
+                $events.push(EventStatus::NestedFailed(SubEvent {
+                        event: $submsg_event,
+                        reply: Some(EventStatus::Failed {
+                            event,
+                            error: error.to_string(),
+                        }),
+                    })
+                );
+                return EventResult::SubErr {
+                    event: $events,
+                    error,
+                };
+            },
+            EventResult::SubErr { event, error } => {
+                $events.push(EventStatus::NestedFailed(
+                    SubEvent {
+                        event: $submsg_event,
+                        reply: Some(EventStatus::NestedFailed(event)),
+                    },
+                ));
+                return EventResult::SubErr {
+                    event: $events,
+                    error,
+                };
+            },
+        };
+    };
+}
+
 /// Recursively execute submessages emitted in a contract response using a
 /// depth-first approach.
 ///
-/// Note: The `sender` in this function signature is the contract, i.e. the
-/// account that emitted the submessages, not the transaction's sender.
+/// ## Notes
+///
+/// - The `sender` in this function signature is the contract, i.e. the
+///   account that emitted the submessages, not the transaction's sender.
+/// - The context for this function requires a boxed storage (`Box<dyn Storage>`)
+///   instead of using a generic (`AppCtx<VM, S> where S: Storage`).
+///   This is necessary because the function is
 pub fn handle_submessages<VM>(
     vm: VM,
-    // This function takes a boxed store instead of using a generic like others.
-    //
-    // This is because this function is recursive: every layer of recursion, it
-    // wraps the store with `Shared<Buffer<S>>`.
-    //
-    // Although the recursion is guaranteed to be bounded at run time (thanks to
-    // gas limit), the compiler can't understand this. The compiler thinks the
-    // wrapping can possibly go on infinitely. It would throw this error:
-    //
-    // > error: reached the recursion limit while instantiating
-    // > `process_msg::<Shared<Buffer<Shared<Buffer<Shared<...>>>>>>`
-    //
-    // To prevent this, we use `Box<dyn Storage>` instead, which is an opaque
-    // type, so that the compiler does not think about how many layers of
-    // wrapping there are.
-    //
-    // Another complexity involved here is that we need the store to be clonable.
-    // However we can't write `Box<dyn Storage + Clone>` because `Clone` is not
-    // an object-safe trait:
-    // https://doc.rust-lang.org/reference/items/traits.html#object-safety
-    //
-    // Instead, we use the `dyn_clone::DynClone` trait:
-    // https://docs.rs/dyn-clone/1.0.16/dyn_clone/
     storage: Box<dyn Storage>,
-    block: BlockInfo,
     gas_tracker: GasTracker,
+    block: BlockInfo,
     msg_depth: usize,
     sender: Addr,
     submsgs: Vec<SubMessage>,
-) -> AppResult<Vec<Event>>
+) -> EventResult<Vec<EventStatus<SubEvent>>>
 where
-    VM: Vm + Clone,
+    VM: Vm + Clone + 'static,
     AppError: From<VM::Error>,
 {
     let mut events = vec![];
 
     if msg_depth > MAX_MESSAGE_DEPTH {
-        return Err(AppError::ExceedMaxMessageDepth);
+        return EventResult::Err {
+            event: vec![],
+            error: AppError::ExceedMaxMessageDepth,
+        };
     }
 
     for submsg in submsgs {
@@ -64,56 +89,108 @@ where
             vm.clone(),
             Box::new(buffer.clone()),
             gas_tracker.clone(),
-            msg_depth + 1, // important: increase message depth
             block,
+            msg_depth + 1, // important: increase message depth
             sender,
             submsg.msg,
         );
 
-        match (submsg.reply_on, result) {
+        match (&submsg.reply_on, result.clone().as_result()) {
             // Success - callback requested
             // Flush state changes, log events, give callback.
-            (ReplyOn::Success(payload) | ReplyOn::Always(payload), Result::Ok(submsg_events)) => {
+            (ReplyOn::Success(payload) | ReplyOn::Always(payload), Result::Ok(submsg_event)) => {
                 buffer.disassemble().consume();
-                events.extend(submsg_events.clone());
-                events.extend(do_reply(
+
+                let reply = do_reply(
                     vm.clone(),
                     storage.clone(),
                     gas_tracker.clone(),
-                    msg_depth + 1, // important: increase message depth
                     block,
+                    msg_depth + 1, // important: increase message depth
                     sender,
-                    &payload,
-                    &GenericResult::Ok(submsg_events),
-                )?);
+                    payload,
+                    &GenericResult::Ok(submsg_event.clone()),
+                    &submsg.reply_on,
+                );
+
+                let submsg_event = HandleEventStatus::Ok(submsg_event);
+
+                try_add_subevent!(events, submsg_event, reply);
             },
             // Error - callback requested
             // Discard uncommitted state changes, give callback.
-            (ReplyOn::Error(payload) | ReplyOn::Always(payload), Result::Err(err)) => {
-                events.extend(do_reply(
+            (
+                ReplyOn::Error(payload) | ReplyOn::Always(payload),
+                Result::Err((submsg_event, err)),
+            ) => {
+                let reply = do_reply(
                     vm.clone(),
                     storage.clone(),
                     gas_tracker.clone(),
-                    msg_depth + 1, // important: increase message depth
                     block,
+                    msg_depth + 1, // important: increase message depth
                     sender,
-                    &payload,
+                    payload,
                     &GenericResult::Err(err.to_string()),
-                )?);
+                    &submsg.reply_on,
+                );
+
+                let submsg_event = if reply.is_ok() {
+                    HandleEventStatus::handled(submsg_event, err)
+                } else if let EventResult::Err { .. } = result {
+                    HandleEventStatus::failed(submsg_event, err)
+                } else {
+                    HandleEventStatus::NestedFailed(submsg_event)
+                };
+
+                try_add_subevent!(events, submsg_event, reply);
             },
             // Success - callback not requested
             // Flush state changes, log events, move on to the next submsg.
-            (ReplyOn::Error(_) | ReplyOn::Never, Result::Ok(submsg_events)) => {
+            (ReplyOn::Error(_), Result::Ok(submsg_event)) => {
                 buffer.disassemble().consume();
-                events.extend(submsg_events);
+                events.push(EventStatus::Ok(SubEvent {
+                    event: HandleEventStatus::Ok(submsg_event),
+                    reply: Some(EventStatus::NotReached),
+                }));
+            },
+
+            (ReplyOn::Never, Result::Ok(submsg_event)) => {
+                buffer.disassemble().consume();
+
+                events.push(EventStatus::Ok(SubEvent {
+                    event: HandleEventStatus::Ok(submsg_event),
+                    // Not requested
+                    reply: None,
+                }));
             },
             // Error - callback not requested
             // Abort by throwing error.
-            (ReplyOn::Success(_) | ReplyOn::Never, Result::Err(err)) => {
-                return Err(err);
+            (ReplyOn::Success(_), Result::Err((_, err))) => {
+                events.push(EventStatus::NestedFailed(SubEvent {
+                    event: result.into(),
+                    reply: None,
+                }));
+
+                return EventResult::SubErr {
+                    event: events,
+                    error: err,
+                };
+            },
+
+            (ReplyOn::Never, Result::Err((_, err))) => {
+                events.push(EventStatus::NestedFailed(SubEvent {
+                    event: result.into(),
+                    reply: None,
+                }));
+
+                return EventResult::SubErr {
+                    event: events,
+                    error: err,
+                };
             },
         };
     }
 
-    Ok(events)
+    EventResult::Ok(events)
 }

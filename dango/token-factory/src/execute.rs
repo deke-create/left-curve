@@ -1,24 +1,20 @@
 use {
-    crate::{DENOM_ADMINS, DENOM_CREATION_FEE},
+    crate::{ADMINS, CONFIG},
     anyhow::{bail, ensure},
     dango_account_factory::ACCOUNTS_BY_USER,
     dango_types::{
         account_factory::Username,
-        bank,
-        config::ACCOUNT_FACTORY_KEY,
-        token_factory::{ExecuteMsg, InstantiateMsg, NAMESPACE},
+        bank::{self, Metadata},
+        taxman,
+        token_factory::{Config, ExecuteMsg, InstantiateMsg, NAMESPACE},
+        DangoQuerier,
     },
-    grug::{Addr, Coins, Denom, Inner, IsZero, Message, MutableCtx, Part, Response, Uint128},
+    grug::{Addr, Coins, Denom, Inner, Message, MutableCtx, Part, Response, Uint128},
 };
 
 #[cfg_attr(not(feature = "library"), grug::export)]
 pub fn instantiate(ctx: MutableCtx, msg: InstantiateMsg) -> anyhow::Result<Response> {
-    ensure!(
-        msg.denom_creation_fee.amount.is_non_zero(),
-        "denom creation fee can't be zero"
-    );
-
-    DENOM_CREATION_FEE.save(ctx.storage, &msg.denom_creation_fee)?;
+    CONFIG.save(ctx.storage, &msg.config)?;
 
     Ok(Response::new())
 }
@@ -26,11 +22,13 @@ pub fn instantiate(ctx: MutableCtx, msg: InstantiateMsg) -> anyhow::Result<Respo
 #[cfg_attr(not(feature = "library"), grug::export)]
 pub fn execute(ctx: MutableCtx, msg: ExecuteMsg) -> anyhow::Result<Response> {
     match msg {
+        ExecuteMsg::Configure { new_cfg } => configure(ctx, new_cfg),
         ExecuteMsg::Create {
             username,
             subdenom,
             admin,
-        } => create(ctx, subdenom, username, admin),
+            metadata,
+        } => create(ctx, subdenom, username, admin, metadata),
         ExecuteMsg::Mint { denom, to, amount } => mint(ctx, denom, to, amount),
         ExecuteMsg::Burn {
             denom,
@@ -40,17 +38,29 @@ pub fn execute(ctx: MutableCtx, msg: ExecuteMsg) -> anyhow::Result<Response> {
     }
 }
 
+fn configure(ctx: MutableCtx, new_cfg: Config) -> anyhow::Result<Response> {
+    ensure!(
+        ctx.sender == ctx.querier.query_owner()?,
+        "only the chain owner can update denom creation fee"
+    );
+
+    CONFIG.save(ctx.storage, &new_cfg)?;
+
+    Ok(Response::new())
+}
+
 fn create(
     ctx: MutableCtx,
     subdenom: Denom,
     username: Option<Username>,
     admin: Option<Addr>,
+    metadata: Option<Metadata>,
 ) -> anyhow::Result<Response> {
     // If the sender has chosen to use a username as the sub-namespace, ensure
     // the sender is associated with the username.
     // Otherwise, use the sender's address as the sub-namespace.
     let subnamespace = if let Some(username) = username {
-        let account_factory = ctx.querier.query_app_config(ACCOUNT_FACTORY_KEY)?;
+        let account_factory = ctx.querier.query_account_factory()?;
 
         if ctx
             .querier
@@ -66,58 +76,81 @@ fn create(
             );
         }
 
-        username.to_string()
+        // A username is necessarily a valid denom part, so use uncheck here.
+        Part::new_unchecked(username.into_inner())
     } else {
-        ctx.sender.to_string()
+        // Same with address - necessarily a valid denom part.
+        Part::new_unchecked(ctx.sender.to_string())
     };
 
     // Ensure the sender has paid the correct amount of fee.
-    // Note: the logic here assumes the expected fee isn't zero, which we make
-    // sure of during instantiation.
-    {
-        let expect = DENOM_CREATION_FEE.load(ctx.storage)?;
-        let actual = ctx.funds.into_one_coin()?;
+    // If there's a non-zero fee, forward it to the taxman.
+    let fee_msg = {
+        let factory_cfg = CONFIG.load(ctx.storage)?;
 
-        ensure!(
-            actual == expect,
-            "incorrect denom creation fee! expecting {expect}, got {actual}"
-        );
-    }
+        if let Some(fee) = factory_cfg.token_creation_fee {
+            let expect = fee.into_inner();
+            let actual = ctx.funds.into_one_coin()?;
+
+            ensure!(
+                actual == expect,
+                "incorrect denom creation fee! expecting {expect}, got {actual}"
+            );
+
+            let taxman = ctx.querier.query_taxman()?;
+
+            Some(Message::execute(
+                taxman,
+                &taxman::ExecuteMsg::Pay { payer: ctx.sender },
+                actual,
+            )?)
+        } else {
+            None
+        }
+    };
 
     // Ensure the denom hasn't already been created.
-    {
-        let denom = {
-            let mut parts = Vec::with_capacity(2 + subdenom.inner().len());
-            parts.push(Part::new_unchecked(NAMESPACE));
-            parts.push(Part::new_unchecked(subnamespace));
-            parts.extend(subdenom.into_inner());
-
-            Denom::from_parts(parts)?
-        };
-
+    let denom = {
+        let denom = subdenom.prepend(&[&NAMESPACE, &subnamespace])?;
         let admin = admin.unwrap_or(ctx.sender);
 
         ensure!(
-            !DENOM_ADMINS.has(ctx.storage, &denom),
+            !ADMINS.has(ctx.storage, &denom),
             "denom `{denom}` already exists"
         );
 
-        DENOM_ADMINS.save(ctx.storage, &denom, &admin)?;
-    }
+        ADMINS.save(ctx.storage, &denom, &admin)?;
 
-    Ok(Response::new())
+        denom
+    };
+
+    // Optionally set the token's metadata.
+    let metadata_msg = if let Some(metadata) = metadata {
+        let bank = ctx.querier.query_bank()?;
+        Some(Message::execute(
+            bank,
+            &bank::ExecuteMsg::SetMetadata { denom, metadata },
+            Coins::new(),
+        )?)
+    } else {
+        None
+    };
+
+    Ok(Response::new()
+        .may_add_message(fee_msg)
+        .may_add_message(metadata_msg))
 }
 
 fn mint(ctx: MutableCtx, denom: Denom, to: Addr, amount: Uint128) -> anyhow::Result<Response> {
     ensure!(
-        ctx.sender == DENOM_ADMINS.load(ctx.storage, &denom)?,
+        ctx.sender == ADMINS.load(ctx.storage, &denom)?,
         "sender isn't the admin of denom `{denom}`"
     );
 
-    let cfg = ctx.querier.query_config()?;
+    let bank = ctx.querier.query_bank()?;
 
     Ok(Response::new().add_message(Message::execute(
-        cfg.bank,
+        bank,
         &bank::ExecuteMsg::Mint { to, denom, amount },
         Coins::new(),
     )?))
@@ -125,14 +158,14 @@ fn mint(ctx: MutableCtx, denom: Denom, to: Addr, amount: Uint128) -> anyhow::Res
 
 fn burn(ctx: MutableCtx, denom: Denom, from: Addr, amount: Uint128) -> anyhow::Result<Response> {
     ensure!(
-        ctx.sender == DENOM_ADMINS.load(ctx.storage, &denom)?,
+        ctx.sender == ADMINS.load(ctx.storage, &denom)?,
         "sender isn't the admin of denom `{denom}`"
     );
 
-    let cfg = ctx.querier.query_config()?;
+    let bank = ctx.querier.query_bank()?;
 
     Ok(Response::new().add_message(Message::execute(
-        cfg.bank,
+        bank,
         &bank::ExecuteMsg::Burn {
             from,
             denom,

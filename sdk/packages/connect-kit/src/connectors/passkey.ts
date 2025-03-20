@@ -1,14 +1,15 @@
-import { requestWebAuthnSignature, sha256 } from "@leftcurve/crypto";
-import { encodeBase64, encodeUtf8, serialize } from "@leftcurve/encoding";
-import { createKeyHash, createUserClient } from "@leftcurve/sdk";
-import { getAccountsByUsername, getKeysByUsername } from "@leftcurve/sdk/actions";
-import { createConnector } from "./createConnector";
+import { parseAsn1Signature, requestWebAuthnSignature, sha256 } from "@left-curve/crypto";
+import { encodeBase64, encodeUtf8, serialize } from "@left-curve/encoding";
+import { createKeyHash, createSignerClient } from "@left-curve/sdk";
+import { getAccountsByUsername, getKeysByUsername } from "@left-curve/sdk/actions";
+import { createConnector } from "./createConnector.js";
 
-import type { UserClient } from "@leftcurve/sdk/clients";
-import { ConnectorSigner } from "@leftcurve/sdk/signers";
-import { getRootDomain } from "@leftcurve/utils";
+import type { SignerClient } from "@left-curve/sdk/clients";
+import { ConnectorSigner } from "@left-curve/sdk/signers";
+import { KeyAlgo } from "@left-curve/types";
+import { getRootDomain } from "@left-curve/utils";
 
-import type { AccountTypes, Address, Transport } from "@leftcurve/types";
+import type { AccountTypes, Address, Transport } from "@left-curve/types";
 
 type PasskeyConnectorParameters = {
   icon?: string;
@@ -17,7 +18,7 @@ type PasskeyConnectorParameters = {
 export function passkey(parameters: PasskeyConnectorParameters = {}) {
   let _transport: Transport;
   let _username: string;
-  let _client: UserClient;
+  let _client: SignerClient;
   let _isAuthorized = false;
 
   const { icon } = parameters;
@@ -41,7 +42,7 @@ export function passkey(parameters: PasskeyConnectorParameters = {}) {
             userVerification: "preferred",
           });
 
-          const keyHash = createKeyHash({ credentialId });
+          const keyHash = createKeyHash({ credentialId, keyAlgo: KeyAlgo.Secp256r1 });
           const keys = await getKeysByUsername(client, { username });
 
           if (!Object.keys(keys).includes(keyHash)) throw new Error("Not authorized");
@@ -57,7 +58,7 @@ export function passkey(parameters: PasskeyConnectorParameters = {}) {
       },
       async getClient() {
         if (!_client) {
-          _client = createUserClient({
+          _client = createSignerClient({
             transport: _transport,
             signer: new ConnectorSigner(this),
             username: _username,
@@ -71,7 +72,7 @@ export function passkey(parameters: PasskeyConnectorParameters = {}) {
           rpId: getRootDomain(window.location.hostname),
           userVerification: "preferred",
         });
-        return createKeyHash({ credentialId });
+        return createKeyHash({ credentialId, keyAlgo: KeyAlgo.Secp256r1 });
       },
       async getAccounts() {
         const client = await this.getClient();
@@ -92,24 +93,31 @@ export function passkey(parameters: PasskeyConnectorParameters = {}) {
         return _isAuthorized;
       },
       async requestSignature(signDoc) {
-        const { typedData, ...txMessage } = signDoc;
-        const bytes = sha256(serialize(txMessage));
+        const { sender, messages, chainId, sequence } = signDoc;
+        const bytes = sha256(serialize({ sender, messages, chainId, sequence }));
 
-        const { signature, webauthn, credentialId } = await requestWebAuthnSignature({
+        const {
+          webauthn,
+          credentialId,
+          signature: asnSignature,
+        } = await requestWebAuthnSignature({
           challenge: bytes,
           rpId: getRootDomain(window.location.hostname),
           userVerification: "preferred",
         });
 
-        const passkeyCredential = encodeUtf8(
-          JSON.stringify({
-            signature,
-            webauthn,
-          }),
-        );
+        const signature = parseAsn1Signature(asnSignature);
 
-        const credential = { passkey: encodeBase64(passkeyCredential) };
-        const keyHash = createKeyHash({ credentialId });
+        const { authenticatorData, clientDataJSON } = webauthn;
+
+        const passkey = {
+          sig: encodeBase64(signature),
+          client_data: encodeBase64(clientDataJSON),
+          authenticator_data: encodeBase64(authenticatorData),
+        };
+
+        const credential = { passkey };
+        const keyHash = createKeyHash({ credentialId, keyAlgo: KeyAlgo.Secp256r1 });
 
         return { credential, keyHash, signDoc };
       },

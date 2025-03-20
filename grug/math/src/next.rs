@@ -66,7 +66,7 @@ impl_next_bnum! {
     Int256  => Int512,
 }
 
-// ----------------------------------- dec ------------------------------------
+// ----------------------------------- dec -------------------------------------
 
 macro_rules! impl_next_udec {
     ($this:ty => $next:ty) => {
@@ -160,7 +160,7 @@ mod dec_tests {
                 ]
             }
         }
-        method = |_0d:  Dec<_>, samples| {
+        method = |_0d:  Dec<_, 18>, samples| {
             for (current, next) in samples {
                 // let current = bt(_0, Dec::new(current));
                 dt(_0d, current);

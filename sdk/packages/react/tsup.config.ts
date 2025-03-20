@@ -1,4 +1,4 @@
-import config from "@leftcurve/config/tsup/common.json" with { type: "json" };
+import config from "@left-curve/config/tsup/common.json" with { type: "json" };
 import { type Options, defineConfig } from "tsup";
 
 /**
@@ -7,9 +7,9 @@ import { type Options, defineConfig } from "tsup";
 export default defineConfig([
   {
     ...(config as Options),
-    entry: ["src/index.ts"],
+    outExtension: ({ format }) => (format === "cjs" ? { js: ".cjs" } : { js: ".js" }),
+    entry: ["src/**", "!src/**/*.spec.ts"],
     format: ["esm"],
-    external: ["react", "@tanstack/react-query"],
     platform: "browser",
   },
 ]);

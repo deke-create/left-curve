@@ -1,8 +1,8 @@
 use {
     core::str,
-    grug::{Prefixer, PrimaryKey, StdError, StdResult},
+    grug::{Inner, PrimaryKey, RawKey, StdError, StdResult},
     serde::{de, Serialize},
-    std::{borrow::Cow, fmt, str::FromStr},
+    std::{fmt, str::FromStr},
 };
 
 /// A name that uniquely identifies a user.
@@ -31,6 +31,18 @@ impl Username {
     }
 }
 
+impl Inner for Username {
+    type U = String;
+
+    fn inner(&self) -> &Self::U {
+        &self.0
+    }
+
+    fn into_inner(self) -> Self::U {
+        self.0
+    }
+}
+
 impl AsRef<str> for Username {
     fn as_ref(&self) -> &str {
         &self.0
@@ -50,8 +62,8 @@ impl PrimaryKey for Username {
 
     const KEY_ELEMS: u8 = 1;
 
-    fn raw_keys(&self) -> Vec<Cow<[u8]>> {
-        vec![Cow::Borrowed(self.0.as_bytes())]
+    fn raw_keys(&self) -> Vec<RawKey> {
+        vec![RawKey::Borrowed(self.0.as_bytes())]
     }
 
     fn from_slice(bytes: &[u8]) -> StdResult<Self::Output> {
@@ -61,12 +73,6 @@ impl PrimaryKey for Username {
         str::from_utf8(bytes)
             .map_err(|err| StdError::deserialize::<&str, _>("utf8", err))
             .and_then(Self::from_str)
-    }
-}
-
-impl Prefixer for Username {
-    fn raw_prefixes(&self) -> Vec<Cow<[u8]>> {
-        vec![Cow::Borrowed(self.0.as_bytes())]
     }
 }
 
@@ -119,7 +125,7 @@ impl<'de> de::Deserialize<'de> for Username {
 
 struct Visitor;
 
-impl<'de> de::Visitor<'de> for Visitor {
+impl de::Visitor<'_> for Visitor {
     type Value = Username;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {

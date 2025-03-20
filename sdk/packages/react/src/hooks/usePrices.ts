@@ -1,4 +1,4 @@
-import { createStorage } from "@leftcurve/connect-kit";
+import { createStorage } from "@left-curve/connect-kit";
 import type {
   AnyCoin,
   CoinGeckoId,
@@ -7,10 +7,10 @@ import type {
   Language,
   Prettify,
   Storage,
-} from "@leftcurve/types";
-import { type CurrencyFormatterOptions, formatCurrency } from "@leftcurve/utils";
+} from "@left-curve/types";
+import { type CurrencyFormatterOptions, formatCurrency, formatUnits } from "@left-curve/utils";
 import { useQuery } from "@tanstack/react-query";
-import { useConfig } from "./useConfig";
+import { useConfig } from "./useConfig.js";
 
 export type UsePricesParameters = {
   refetchInterval?: number;
@@ -78,7 +78,11 @@ export function usePrices(parameters: UsePricesParameters = {}) {
       format = false,
     } = options || {};
     const totalValue = Object.entries(balances).reduce((total, [denom, amount]) => {
-      const price = getPrice(amount, denom, { currency, language, format: false });
+      const price = getPrice(formatUnits(amount, coins[denom].decimals), denom, {
+        currency,
+        language,
+        format: false,
+      });
       total += price;
       return total;
     }, 0);

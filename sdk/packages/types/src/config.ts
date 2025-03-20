@@ -1,15 +1,26 @@
-import type { Chain, ChainId } from "./chain";
-import type { Client } from "./client";
-import type { AnyCoin, Denom } from "./coin";
-import type { Connection, Connector, ConnectorUId, CreateConnectorFn } from "./connector";
-import type { Storage } from "./storage";
-import type { Transport } from "./transports";
+import type { Chain, ChainId } from "./chain.js";
+import type { Client } from "./client.js";
+import type { AnyCoin, Denom } from "./coin.js";
+import type { Connection, Connector, ConnectorUId, CreateConnectorFn } from "./connector.js";
+import type { MipdStore } from "./mipd.js";
+import type { Storage } from "./storage.js";
+import type { Transport } from "./transports.js";
+
+export const ConnectionStatus = {
+  Connected: "connected",
+  Connecting: "connecting",
+  Disconnected: "disconnected",
+  Reconnecting: "reconnecting",
+} as const;
+
+export type ConnectionStatusType = (typeof ConnectionStatus)[keyof typeof ConnectionStatus];
 
 export type State<chains extends readonly [Chain, ...Chain[]] = readonly [Chain, ...Chain[]]> = {
   chainId: chains[number]["id"];
+  isMipdLoaded: boolean;
   connections: Map<ConnectorUId, Connection>;
   connectors: Map<chains[number]["id"], ConnectorUId>;
-  status: "connected" | "connecting" | "disconnected" | "reconnecting";
+  status: ConnectionStatusType;
 };
 
 export type Config<
@@ -20,13 +31,11 @@ export type Config<
   >,
   coin extends AnyCoin = AnyCoin,
 > = {
-  readonly ssr: boolean;
   readonly chains: chains;
   readonly coins: Record<ChainId, Record<Denom, coin>>;
   readonly connectors: readonly Connector[];
   readonly storage: Storage | null;
   readonly state: State<chains>;
-  readonly store: StoreApi;
   setState<tchains extends readonly [Chain, ...Chain[]] = chains>(
     value: State<tchains> | ((state: State<tchains>) => State<tchains>),
   ): void;
@@ -42,6 +51,7 @@ export type Config<
   getClient<chainId extends chains[number]["id"]>(parameters?: {
     chainId?: chainId | chains[number]["id"] | undefined;
   }): Client<transports[chainId], chains[number]>;
+  _internal: Internal;
 };
 
 export type CreateConfigParameters<
@@ -58,6 +68,7 @@ export type CreateConfigParameters<
   ssr?: boolean;
   batch?: boolean;
   storage?: Storage | null;
+  multiInjectedProviderDiscovery?: boolean;
   connectors?: CreateConnectorFn[];
 };
 
@@ -73,5 +84,16 @@ export type StoreApi = {
   persist: {
     rehydrate: () => Promise<void> | void;
     hasHydrated: () => boolean;
+  };
+};
+
+type Internal = {
+  readonly ssr: boolean;
+  readonly mipd: MipdStore | undefined;
+  readonly store: StoreApi;
+  connectors: {
+    setup: (connectorFn: CreateConnectorFn) => Connector;
+    setState(value: Connector[] | ((state: Connector[]) => Connector[])): void;
+    subscribe(listener: (state: Connector[], prevState: Connector[]) => void): () => void;
   };
 };

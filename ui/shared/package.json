@@ -5,16 +5,16 @@
     "ci": "pnpm lint",
     "lint": "pnpm biome check --write ./src",
     "lint:fix": "pnpm biome ci ./src",
-    "clean": "rm -rf ./build && rm -rf node_modules",
+    "clean": "rm -rf ./build && rm -rf node_modules && rm -rf tsconfig.tsbuildinfo",
     "clean:build": "rm -rf ./build",
     "sb:dev": "storybook dev -p 6006",
     "sb:build": "storybook build",
-    "pre-dev": "pnpm build",
-    "dev": "pnpm tsup --watch --onSuccess 'tsup --dts-only --silent' --silent",
+    "pre-dev": "tsc",
+    "dev": "tsc -w",
     "build": "pnpm tsup --clean"
   },
-  "main": "./build/index.js",
-  "module": "./build/index.mjs",
+  "main": "./build/index.cjs",
+  "module": "./build/index.js",
   "types": "./build/index.d.ts",
   "typings": "./build/index.d.ts",
   "sideEffects": false,
@@ -26,37 +26,30 @@
     "!tsup.config.ts"
   ],
   "exports": {
-    "./fonts/*": "./build/fonts/*",
     ".": {
       "types": "./build/index.d.ts",
-      "import": "./build/index.mjs",
-      "default": "./build/index.js"
+      "import": "./build/index.js",
+      "default": "./build/index.cjs"
     },
     "./components": {
       "types": "./build/components/index.d.ts",
-      "import": "./build/components/index.mjs",
-      "default": "./build/components/index.js"
-    },
-    "./components/examples": {
-      "types": "./build/components/examples/index.d.ts",
-      "import": "./build/components/examples/index.mjs",
-      "default": "./build/components/examples/index.js"
+      "import": "./build/components/index.js",
+      "default": "./build/components/index.cjs"
     }
   },
   "typesVersions": {
     "*": {
       "components": [
         "./build/components/index.d.ts"
-      ],
-      "components/examples": [
-        "./build/components/examples/index.d.ts"
       ]
     }
   },
   "dependencies": {
-    "@leftcurve/react": "workspace:^",
-    "@leftcurve/sdk": "workspace:^",
-    "@leftcurve/utils": "workspace:^",
+    "@dango/config": "workspace:^",
+    "@left-curve/react": "workspace:^",
+    "@left-curve/sdk": "workspace:^",
+    "@left-curve/connect-kit": "workspace:^",
+    "@left-curve/utils": "workspace:^",
     "@radix-ui/react-label": "^2.1.0",
     "@radix-ui/react-slot": "^1.1.0",
     "@react-aria/button": "^3.9.8",
@@ -65,21 +58,27 @@
     "@react-aria/overlays": "^3.23.2",
     "@react-aria/select": "^3.14.9",
     "@react-aria/tabs": "^3.9.5",
-    "@react-aria/utils": "^3.25.2",
+    "@react-aria/utils": "^3.25.3",
     "@react-stately/collections": "^3.10.9",
     "@react-stately/list": "^3.10.8",
     "@react-stately/overlays": "^3.6.10",
     "@react-stately/select": "^3.6.7",
     "@react-stately/tabs": "^3.6.9",
+    "@react-stately/utils": "^3.10.4",
     "@react-types/shared": "^3.24.1",
     "clsx": "^2.1.1",
-    "framer-motion": "^11.3.21",
+    "cmdk": "^1.0.4",
+    "framer-motion": "catalog:",
+    "qr-code-styling": "^1.7.2",
     "react-use": "^17.5.1",
-    "tailwind-variants": "^0.2.1"
+    "tailwind-variants": "^0.2.1",
+    "tailwind-scrollbar": "^3.1.0",
+    "tailwindcss": "catalog:",
+    "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
-    "@leftcurve/config": "workspace:^",
-    "@leftcurve/types": "workspace:^",
+    "@left-curve/config": "workspace:^",
+    "@left-curve/types": "workspace:^",
     "@react-types/select": "^3.9.6",
     "@storybook/addon-a11y": "^8.3.2",
     "@storybook/addon-essentials": "^8.3.2",
@@ -87,22 +86,23 @@
     "@storybook/blocks": "^8.3.2",
     "@storybook/react": "^8.3.2",
     "@storybook/react-vite": "^8.3.2",
-    "@tanstack/react-query": ">=5.45.1",
-    "@types/node": "^20",
-    "@types/react": "^18.3.3",
-    "@types/react-dom": "^18.3.0",
-    "autoprefixer": "^10.4.20",
-    "glob": "^11.0.0",
-    "postcss": "^8",
-    "react": "^18",
-    "react-dom": "^18.3.1",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "autoprefixer": "catalog:",
+    "nuqs": "catalog:",
+    "postcss": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
     "storybook": "^8.3.2",
-    "tailwindcss": "^3.4.1",
-    "vite": "^5.4.7",
-    "vite-tsconfig-paths": "^5.0.1"
+    "tailwindcss": "catalog:",
+    "vite": "catalog:",
+    "vite-tsconfig-paths": "catalog:"
   },
   "peerDependencies": {
+    "react-hook-form": "^7",
     "@tanstack/react-query": ">=5.0.0",
+    "nuqs": ">=2.0.0",
     "react": "^18",
     "react-dom": "^18"
   }

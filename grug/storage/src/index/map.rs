@@ -1,5 +1,5 @@
 use {
-    crate::{Borsh, Codec, Map, Prefix, PrefixBound, PrimaryKey},
+    crate::{Borsh, Codec, Map, Path, Prefix, PrefixBound, PrimaryKey},
     grug_types::{Bound, Order, Record, StdError, StdResult, Storage},
 };
 
@@ -17,13 +17,13 @@ pub struct IndexedMap<'a, K, T, I, C = Borsh>
 where
     C: Codec<T>,
 {
-    primary: Map<'a, K, T, C>,
+    pub primary: Map<'a, K, T, C>,
     /// This is meant to be read directly to get the proper types, like:
     /// `map.idx.owner.items(...)`.
     pub idx: I,
 }
 
-impl<'a, K, T, I, C> IndexedMap<'a, K, T, I, C>
+impl<K, T, I, C> IndexedMap<'_, K, T, I, C>
 where
     K: PrimaryKey,
     C: Codec<T>,
@@ -33,6 +33,14 @@ where
             primary: Map::new(pk_namespace),
             idx: indexes,
         }
+    }
+
+    pub fn path_raw(&self, key_raw: &[u8]) -> Path<T, C> {
+        self.primary.path_raw(key_raw)
+    }
+
+    pub fn path(&self, key: K) -> Path<T, C> {
+        self.primary.path(key)
     }
 
     pub fn prefix(&self, prefix: K::Prefix) -> Prefix<K::Suffix, T, C> {
@@ -280,20 +288,64 @@ where
     I: IndexList<K, T>,
     C: Codec<T>,
 {
-    pub fn update<A, Err>(
+    pub fn may_update<F, E>(&'a self, storage: &mut dyn Storage, key: K, action: F) -> Result<T, E>
+    where
+        F: FnOnce(Option<T>) -> Result<T, E>,
+        E: From<StdError>,
+    {
+        let old_data = self.may_load(storage, key.clone())?;
+        let new_data = action(old_data.clone())?;
+
+        self.replace(storage, key, Some(&new_data), old_data.as_ref())?;
+
+        Ok(new_data)
+    }
+
+    pub fn update<F, E>(&'a self, storage: &mut dyn Storage, key: K, action: F) -> Result<T, E>
+    where
+        F: FnOnce(T) -> Result<T, E>,
+        E: From<StdError>,
+    {
+        let old_data = self.load(storage, key.clone())?;
+        let new_data = action(old_data.clone())?;
+
+        self.replace(storage, key, Some(&new_data), Some(&old_data))?;
+
+        Ok(new_data)
+    }
+
+    pub fn may_modify<F, E>(
         &'a self,
         storage: &mut dyn Storage,
         key: K,
-        action: A,
-    ) -> Result<Option<T>, Err>
+        action: F,
+    ) -> Result<Option<T>, E>
     where
-        A: FnOnce(Option<T>) -> Result<Option<T>, Err>,
-        Err: From<StdError>,
+        F: FnOnce(Option<T>) -> Result<Option<T>, E>,
+        E: From<StdError>,
     {
         let old_data = self.may_load(storage, key.clone())?;
         let new_data = action(old_data.clone())?;
 
         self.replace(storage, key, new_data.as_ref(), old_data.as_ref())?;
+
+        Ok(new_data)
+    }
+
+    pub fn modify<F, E>(
+        &'a self,
+        storage: &mut dyn Storage,
+        key: K,
+        action: F,
+    ) -> Result<Option<T>, E>
+    where
+        F: FnOnce(T) -> Result<Option<T>, E>,
+        E: From<StdError>,
+    {
+        let old_data = self.load(storage, key.clone())?;
+        let new_data = action(old_data.clone())?;
+
+        self.replace(storage, key, new_data.as_ref(), Some(&old_data))?;
 
         Ok(new_data)
     }
@@ -304,9 +356,9 @@ where
 #[cfg(test)]
 mod tests {
     use {
-        crate::{Index, IndexList, IndexedMap, MultiIndex, UniqueIndex},
+        crate::{Index, IndexList, IndexedMap, MultiIndex, PrefixBound, UniqueIndex},
         borsh::{BorshDeserialize, BorshSerialize},
-        grug_types::{Bound, MockStorage, Order, StdResult},
+        grug_types::{BorshSerExt, Bound, MockStorage, Order, StdResult},
     };
 
     const FOOS: IndexedMap<(u64, u64), Foo, FooIndexes> = IndexedMap::new("foo", FooIndexes {
@@ -342,7 +394,7 @@ mod tests {
         pub id: UniqueIndex<'a, (u64, u64), u32, Foo>,
     }
 
-    impl<'a> IndexList<(u64, u64), Foo> for FooIndexes<'a> {
+    impl IndexList<(u64, u64), Foo> for FooIndexes<'_> {
         fn get_indexes(&self) -> Box<dyn Iterator<Item = &'_ dyn Index<(u64, u64), Foo>> + '_> {
             let v: Vec<&dyn Index<(u64, u64), Foo>> =
                 vec![&self.name, &self.id, &self.name_surname];
@@ -585,6 +637,113 @@ mod tests {
             assert_eq!(val, [((0, 2), Foo::new("bar", "s_bar", 102)),]);
         }
     }
+
+    #[test]
+    fn multi_index_sub_prefix_tuple_works() {
+        let storage = setup_test();
+
+        // Given A, iterate (B, C, D) using prefix_range, without bounds only B.
+        {
+            let val = FOOS
+                .idx
+                .name_surname
+                .sub_prefix("bar".to_string())
+                .prefix_range(
+                    &storage,
+                    None,
+                    Some(PrefixBound::Inclusive("s_bar".to_string())),
+                    Order::Ascending,
+                )
+                .collect::<StdResult<Vec<_>>>()
+                .unwrap();
+
+            assert_eq!(val, [
+                ((0, 1), Foo::new("bar", "s_bar", 101)),
+                ((0, 2), Foo::new("bar", "s_bar", 102)),
+                ((1, 1), Foo::new("bar", "s_bar", 103)),
+            ]);
+        }
+
+        // Given A, iterate (B, C, D) using prefix_keys, without bounds only B.
+        {
+            let val = FOOS
+                .idx
+                .name_surname
+                .sub_prefix("bar".to_string())
+                .prefix_keys(
+                    &storage,
+                    None,
+                    Some(PrefixBound::Inclusive("s_bar".to_string())),
+                    Order::Ascending,
+                )
+                .collect::<StdResult<Vec<_>>>()
+                .unwrap();
+
+            assert_eq!(val, [
+                ("s_bar".to_string(), (0, 1)),
+                ("s_bar".to_string(), (0, 2)),
+                ("s_bar".to_string(), (1, 1)),
+            ]);
+        }
+
+        // Given A, iterate (B, C, D) usign prefix_values, without bounds only B.
+        {
+            let val = FOOS
+                .idx
+                .name_surname
+                .sub_prefix("bar".to_string())
+                .prefix_values(
+                    &storage,
+                    None,
+                    Some(PrefixBound::Inclusive("s_bar".to_string())),
+                    Order::Ascending,
+                )
+                .collect::<StdResult<Vec<_>>>()
+                .unwrap();
+
+            assert_eq!(val, [
+                Foo::new("bar", "s_bar", 101),
+                Foo::new("bar", "s_bar", 102),
+                Foo::new("bar", "s_bar", 103),
+            ]);
+        }
+
+        // Given A, iterate (B, C, D) using values, without bounds only B.
+        {
+            let val = FOOS
+                .idx
+                .name_surname
+                .sub_prefix("bar".to_string())
+                .values(&storage, None, None, Order::Ascending)
+                .collect::<StdResult<Vec<_>>>()
+                .unwrap();
+
+            assert_eq!(val, [
+                Foo::new("bar", "s_bar", 101),
+                Foo::new("bar", "s_bar", 102),
+                Foo::new("bar", "s_bar", 103),
+                Foo::new("bar", "s_fooes", 104),
+            ]);
+        }
+
+        // Given A, iterate (B, C, D) using values_raw, without bounds only B.
+        {
+            let val = FOOS
+                .idx
+                .name_surname
+                .sub_prefix("bar".to_string())
+                .values_raw(&storage, None, None, Order::Ascending)
+                .collect::<StdResult<Vec<_>>>()
+                .unwrap();
+
+            assert_eq!(val, [
+                Foo::new("bar", "s_bar", 101).to_borsh_vec().unwrap(),
+                Foo::new("bar", "s_bar", 102).to_borsh_vec().unwrap(),
+                Foo::new("bar", "s_bar", 103).to_borsh_vec().unwrap(),
+                Foo::new("bar", "s_fooes", 104).to_borsh_vec().unwrap(),
+            ]);
+        }
+    }
 }
 
 // ---------------------- tests copied over from cosmwasm ----------------------
@@ -631,7 +790,7 @@ mod cosmwasm_tests {
     }
 
     // Future Note: this can likely be macro-derived
-    impl<'a, PK> IndexList<PK, Data> for DataCompositeMultiIndex<'a, PK>
+    impl<PK> IndexList<PK, Data> for DataCompositeMultiIndex<'_, PK>
     where
         PK: PrimaryKey,
     {
@@ -1174,7 +1333,7 @@ mod cosmwasm_tests {
         DATA.remove(&mut storage, pks[1]).unwrap();
 
         // change john to mary
-        DATA.update(&mut storage, pks[2], |d| -> StdResult<_> {
+        DATA.may_modify(&mut storage, pks[2], |d| -> StdResult<_> {
             let mut x = d.unwrap();
             assert_eq!(&x.name, "John");
             x.name = "Mary".to_string();
@@ -1699,7 +1858,7 @@ mod cosmwasm_tests {
             secondary: UniqueIndex<'a, PK, u64, u64>,
         }
 
-        impl<'a, PK> IndexList<PK, u64> for Indexes<'a, PK>
+        impl<PK> IndexList<PK, u64> for Indexes<'_, PK>
         where
             PK: PrimaryKey,
         {

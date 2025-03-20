@@ -1,5 +1,6 @@
-import type { Json } from "./encoding";
-import type { Prettify } from "./utils";
+import type { Json } from "./encoding.js";
+import type { HttpRequestParameters } from "./http.js";
+import type { Prettify } from "./utils.js";
 
 export type RpcSchema = readonly {
   Method: string;
@@ -61,40 +62,42 @@ export type RpcRequestOptions = {
   uid?: string | undefined;
 };
 
-export type JsonRpcId = number | string;
+export type JsonRpcId = number;
 
-export interface JsonRpcRequest {
+export type JsonRpcRequest = {
   readonly jsonrpc: "2.0";
   readonly id: JsonRpcId;
   readonly method: string;
   readonly params: Json;
-}
+};
 
-export interface JsonRpcSuccessResponse<T> {
+export type JsonRpcSuccessResponse<T> = {
   readonly jsonrpc: "2.0";
   readonly id: JsonRpcId;
   readonly result: T;
   readonly error: undefined;
-}
+};
 
-export interface JsonRpcError {
+export type JsonRpcError = {
   readonly code: number;
   readonly message: string;
   readonly data?: Json;
-}
+};
 
-export interface JsonRpcErrorResponse {
+export type JsonRpcErrorResponse = {
   readonly jsonrpc: "2.0";
-  readonly id: JsonRpcId | null;
+  readonly id: JsonRpcId;
   readonly error: JsonRpcError;
   readonly result: undefined;
-}
+};
 
-export type JsonRpcResponse<T> = JsonRpcSuccessResponse<T> | JsonRpcErrorResponse;
+export type JsonRpcResponse<T = any> = JsonRpcSuccessResponse<T> | JsonRpcErrorResponse;
 
-export interface RpcClient {
-  readonly request: <T>(method: string, params: Json) => Promise<JsonRpcResponse<T>>;
-}
+export type RpcClient = {
+  readonly request: <body extends JsonRpcRequest | JsonRpcRequest[]>(
+    params: HttpRequestParameters<body>,
+  ) => Promise<body extends JsonRpcRequest[] ? JsonRpcResponse[] : JsonRpcResponse>;
+};
 
 export interface JsonRpcBatchOptions {
   /** Interval for dispatching batches (in milliseconds) */

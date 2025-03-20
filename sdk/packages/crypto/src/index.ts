@@ -1,4 +1,4 @@
-export * from "./webauthn";
+export * from "./webauthn/index.js";
 
 export {
   Keccak256,
@@ -7,19 +7,21 @@ export {
   sha256,
   Sha512,
   sha512,
-} from "./sha";
+} from "./sha.js";
 
 export {
   Ripemd160,
   ripemd160,
-} from "./ripemd";
+} from "./ripemd.js";
 
 export {
-  recoverPublicKey,
-  compressPubKey,
-  verifySignature,
   Secp256k1,
+  secp256k1RecoverPubKey,
+  secp256k1CompressPubKey,
+  secp256k1VerifySignature,
+  Ed25519,
+  ed25519VerifySignature,
   type KeyPair,
-} from "./keys";
+} from "./keys/index.js";
 
-export { ethHashMessage } from "./signature";
+export { ethHashMessage } from "./signature/index.js";

@@ -1,8 +1,8 @@
 "use client";
 
-import { useAccount } from "@leftcurve/react";
+import { useAccount } from "@left-curve/react";
 import { useRef } from "react";
-import { Button, ConnectModal } from "~/components";
+import { Button, ConnectModal } from "../";
 import type { ModalRef } from "./Modal";
 
 export const ConnectButton: React.FC = () => {
@@ -12,7 +12,8 @@ export const ConnectButton: React.FC = () => {
   return (
     <>
       <Button
-        className="relative min-w-28 group"
+        color="gray"
+        className="relative group font-bold px-4 py-2 gap-2"
         onClick={() => (isConnected ? connector?.disconnect() : modalRef.current?.showModal())}
       >
         {!isConnected ? <p>Connect</p> : null}

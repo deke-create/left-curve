@@ -1,14 +1,14 @@
 {
-  "name": "@leftcurve/config",
+  "name": "@left-curve/config",
   "version": "0.1.0",
   "files": [
     "ts",
-    "biome"
+    "biome",
+    "tsup",
+    "typedoc"
   ],
-  "devDependencies": {
-    "tailwind-scrollbar": "^3.1.0",
-    "tailwindcss": "^3.4.1",
-    "unocss": "^0.63.3",
-    "unocss-preset-scrollbar": "^0.3.1"
-  }
+  "license": "TBD",
+  "homepage": "https://grug.build",
+  "repository": "left-curve/left-curve",
+  "keywords": ["grug", "smart-contracts", "blockchain", "cryptocurrency", "web3", "typescript"]
 }

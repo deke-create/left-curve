@@ -9,13 +9,18 @@ import {
   type ConnectMutateAsync,
   type ConnectVariables,
   connectMutationOptions,
-} from "@leftcurve/connect-kit/handlers";
+} from "@left-curve/connect-kit/handlers";
 
-import type { Config, ConfigParameter, Prettify } from "@leftcurve/types";
-import { type UseMutationParameters, type UseMutationReturnType, useMutation } from "../query";
+import {
+  type Config,
+  type ConfigParameter,
+  ConnectionStatus,
+  type Prettify,
+} from "@left-curve/types";
+import { type UseMutationParameters, type UseMutationReturnType, useMutation } from "../query.js";
 
-import { useConfig } from "./useConfig";
-import { type UseConnectorsReturnType, useConnectors } from "./useConnectors";
+import { useConfig } from "./useConfig.js";
+import { type UseConnectorsReturnType, useConnectors } from "./useConnectors.js";
 
 export type UseConnectParameters<config extends Config = Config, context = unknown> = Prettify<
   ConfigParameter<config> & {
@@ -39,7 +44,12 @@ export function useConnect<config extends Config = Config, context = unknown>(
   const config = useConfig(parameters);
 
   const mutationOptions = connectMutationOptions(config);
-  const { mutate, mutateAsync, ...result } = useMutation({
+  const { mutate, mutateAsync, ...result } = useMutation<
+    ConnectData,
+    ConnectErrorType,
+    ConnectVariables,
+    context
+  >({
     ...mutation,
     ...mutationOptions,
   });
@@ -48,7 +58,11 @@ export function useConnect<config extends Config = Config, context = unknown>(
     return config.subscribe(
       ({ status }) => status,
       (status, previousStatus) => {
-        if (previousStatus === "connected" && status === "disconnected") result.reset();
+        if (
+          previousStatus === ConnectionStatus.Connected &&
+          status === ConnectionStatus.Disconnected
+        )
+          result.reset();
       },
     );
   }, [config, result.reset]);

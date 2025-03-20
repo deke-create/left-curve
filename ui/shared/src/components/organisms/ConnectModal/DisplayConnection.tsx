@@ -1,13 +1,13 @@
 "use client";
 
-import { useChainId } from "@leftcurve/react";
-import type { Connector, Username } from "@leftcurve/types";
-import { sleep } from "@leftcurve/utils";
+import { useChainId } from "@left-curve/react";
+import type { Connector, Username } from "@left-curve/types";
+import { wait } from "@left-curve/utils";
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
-import { BackArrowIcon, Button, WalletIcon } from "~/components";
-import { useWizard } from "~/providers";
-import { twMerge } from "~/utils";
+import { BackArrowIcon, Button, WalletIcon } from "../../";
+import { useWizard } from "../../../providers";
+import { twMerge } from "../../../utils";
 import { LoadingIndicator } from "./LoadingIndicator";
 
 export const DisplayConnection: React.FC = () => {
@@ -29,7 +29,7 @@ export const DisplayConnection: React.FC = () => {
     try {
       setError(null);
       setIsLoading(true);
-      await sleep(1000);
+      await wait(1000);
       await connector.connect({ username, chainId });
       done();
     } catch (error) {
@@ -54,7 +54,9 @@ export const DisplayConnection: React.FC = () => {
         animate={{ opacity: 1, translateY: 0 }}
         exit={{ opacity: 0, translateY: 100 }}
       >
-        <h2 className="text-2xl font-semibold py-4">Connecting with {connector.name}</h2>
+        <h2 className="text-2xl font-semibold py-4 text-typography-rose-500">
+          Connecting with {connector.name}
+        </h2>
         <div className="flex items-center justify-center relative">
           {connector.icon ? (
             <img

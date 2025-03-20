@@ -1,10 +1,13 @@
-import { http, createConfig, eip1193, passkey } from "@leftcurve/connect-kit";
-import { devnet } from "@leftcurve/connect-kit/chains";
-import "@leftcurve/types/window";
+import { http, createConfig, passkey } from "@left-curve/react";
+import { devnet } from "@left-curve/react/chains";
+
+import "@left-curve/types/window";
+import type { Config } from "@left-curve/types";
 
 const dango = devnet;
 
-export const config = createConfig({
+export const config: Config = createConfig({
+  multiInjectedProviderDiscovery: true,
   chains: [dango],
   transports: {
     [dango.id]: http(dango.rpcUrls.default.http.at(0), { batch: true }),
@@ -23,16 +26,5 @@ export const config = createConfig({
       },
     },
   },
-  connectors: [
-    eip1193({
-      id: "metamask",
-      name: "Metamask",
-    }),
-    eip1193({
-      id: "keplr",
-      name: "Keplr",
-      provider: () => window.keplr?.ethereum,
-    }),
-    passkey(),
-  ],
+  connectors: [passkey()],
 });

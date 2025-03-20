@@ -28,7 +28,7 @@ where
 
 // ------------------------------------ dec ------------------------------------
 
-impl<U> IsZero for Dec<U>
+impl<U, const S: u32> IsZero for Dec<U, S>
 where
     U: IsZero,
 {
@@ -59,7 +59,7 @@ impl_is_zero! {
     i8, i16, i32, i64, i128, I256, I512,
 }
 
-// ------------------------------------ tests ------------------------------------
+// ----------------------------------- tests -----------------------------------
 
 #[cfg(test)]
 mod int_tests {
@@ -82,7 +82,7 @@ mod dec_tests {
     use crate::{dec_test, test_utils::bt, Dec, IsZero, NumberConst};
 
     dec_test!( is_zero
-        method = |zero: Dec<_>| {
+        method = |zero: Dec<_, 18>| {
             assert!(zero.is_zero());
             assert!(!zero.is_non_zero());
 

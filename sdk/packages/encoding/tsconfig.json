@@ -1,5 +1,18 @@
 {
-  "extends": "@leftcurve/config/ts/common.json",
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "@left-curve/config/ts/common.json",
+  "compilerOptions": {
+    "outDir": "build",
+    "rootDir": "src"
+  },
   "include": ["src"],
-  "exclude": ["node_modules", "build"]
+  "exclude": ["node_modules", "build"],
+  "references": [
+    {
+      "path": "../types"
+    },
+    {
+      "path": "../utils"
+    }
+  ]
 }

@@ -1,15 +1,15 @@
 "use client";
 
 import { type FormEvent, useState } from "react";
-import { useWizard } from "~/providers";
+import { useWizard } from "../../../providers";
 
-import { BackArrowIcon, Button, Input, WalletIcon } from "~/components";
+import { BackArrowIcon, Button, Input, WalletIcon } from "../../";
 import { LoadingIndicator } from "./LoadingIndicator";
 
 import { motion } from "framer-motion";
-import { twMerge } from "~/utils";
+import { twMerge } from "../../../utils";
 
-import type { Connector } from "@leftcurve/types";
+import type { Connector } from "@left-curve/types";
 
 export const DisplayConnect: React.FC = () => {
   const { nextStep, previousStep, setData, data } = useWizard<{
@@ -48,7 +48,9 @@ export const DisplayConnect: React.FC = () => {
         animate={{ opacity: 1, translateY: 0 }}
         exit={{ opacity: 0, translateY: 100 }}
       >
-        <h2 className="text-2xl font-semibold py-4">Connect with {connector.name}</h2>
+        <h2 className="text-2xl font-semibold py-4 text-typography-rose-500">
+          Connect with {connector.name}
+        </h2>
         <div className="flex items-center justify-center relative">
           {connector.icon ? (
             <img

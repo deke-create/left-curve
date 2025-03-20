@@ -1,10 +1,10 @@
 use {
-    crate::{Codec, PrefixBound, Prefixer, PrimaryKey, RawBound},
+    crate::{Codec, PrefixBound, Prefixer, PrimaryKey, RawBound, RawKey},
     grug_types::{
         concat, encode_length, extend_one_byte, increment_last_byte, nested_namespaces_with_key,
         trim, Bound, Order, Record, StdResult, Storage,
     },
-    std::{borrow::Cow, marker::PhantomData},
+    std::marker::PhantomData,
 };
 
 pub struct Prefix<K, T, C>
@@ -21,12 +21,12 @@ impl<K, T, C> Prefix<K, T, C>
 where
     C: Codec<T>,
 {
-    pub fn new(namespace: &[u8], prefixes: &[Cow<[u8]>]) -> Self {
+    pub fn new(namespace: &[u8], prefixes: &[RawKey]) -> Self {
         Self {
             namespace: nested_namespaces_with_key(
                 Some(namespace),
                 prefixes,
-                <Option<&Cow<[u8]>>>::None,
+                Option::<RawKey>::None,
             ),
             suffix: PhantomData,
             data: PhantomData,
@@ -241,6 +241,19 @@ where
                 debug_assert_eq!(&k[0..namespace.len()], namespace, "namespace mispatch");
                 trim(&namespace, &k)
             });
+
+        Box::new(iter)
+    }
+
+    pub(crate) fn prefix_keys_raw_no_trim<'a>(
+        &self,
+        storage: &'a dyn Storage,
+        min: Option<PrefixBound<K>>,
+        max: Option<PrefixBound<K>>,
+        order: Order,
+    ) -> Box<dyn Iterator<Item = Vec<u8>> + 'a> {
+        let (min, max) = range_prefix_bounds(&self.namespace, min, max);
+        let iter = storage.scan_keys(Some(&min), Some(&max), order);
 
         Box::new(iter)
     }

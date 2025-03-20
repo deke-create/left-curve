@@ -3,12 +3,15 @@ mod codec;
 mod counter;
 mod index;
 mod item;
-mod key;
 mod map;
 mod path;
 mod prefix;
+mod prefixer;
+mod primary_key;
+mod raw_key;
 mod set;
 
 pub use {
-    bound::*, codec::*, counter::*, index::*, item::*, key::*, map::*, path::*, prefix::*, set::*,
+    bound::*, codec::*, counter::*, index::*, item::*, map::*, path::*, prefix::*, prefixer::*,
+    primary_key::*, raw_key::*, set::*,
 };

@@ -1,25 +1,122 @@
 use {
-    anyhow::ensure,
-    grug_app::{App, AppError, Db, Vm},
+    grug_app::{
+        App, AppError, AppResult, Db, Indexer, NaiveProposalPreparer, NullIndexer,
+        ProposalPreparer, Vm,
+    },
     grug_crypto::sha2_256,
     grug_db_memory::MemDb,
     grug_math::Uint128,
     grug_types::{
-        Addr, Addressable, Binary, BlockInfo, BlockOutcome, Coins, Config, ConfigUpdates,
-        ContractInfo, Denom, Duration, GenesisState, Hash256, Json, JsonDeExt, JsonSerExt, Message,
-        Op, Outcome, Query, QueryRequest, ResultExt, Signer, StdError, Tx, TxOutcome, UnsignedTx,
+        Addr, Addressable, Binary, Block, BlockInfo, BlockOutcome, CheckTxOutcome, Code, Coins,
+        Config, ContractInfo, Denom, Duration, GenesisState, Hash256, JsonDeExt, JsonSerExt,
+        Message, NonEmpty, Query, QueryRequest, ResultExt, Signer, StdError, Tx, TxError,
+        TxOutcome, TxSuccess, UnsignedTx,
     },
     grug_vm_rust::RustVm,
     serde::{de::DeserializeOwned, ser::Serialize},
-    std::{collections::BTreeMap, error::Error, fmt::Debug},
+    std::{collections::BTreeMap, fmt::Debug},
 };
 
-pub struct TestSuite<DB = MemDb, VM = RustVm>
+// ------------------------------- UploadOutcome -------------------------------
+
+#[must_use = "`UploadOutcome` must be checked for success or error with `should_succeed`, `should_fail`, or similar methods."]
+pub struct UploadOutcome {
+    code_hash: Hash256,
+    outcome: TxOutcome,
+}
+
+pub struct UploadOutcomeSuccess {
+    pub code_hash: Hash256,
+    pub outcome: TxSuccess,
+}
+
+impl ResultExt for UploadOutcome {
+    type Error = TxError;
+    type Success = UploadOutcomeSuccess;
+
+    fn should_succeed(self) -> Self::Success {
+        UploadOutcomeSuccess {
+            code_hash: self.code_hash,
+            outcome: self.outcome.should_succeed(),
+        }
+    }
+
+    fn should_fail(self) -> Self::Error {
+        self.outcome.should_fail()
+    }
+}
+
+// ---------------------------- InstantiateOutcome -----------------------------
+
+#[must_use = "`InstantiateOutcome` must be checked for success or error with `should_succeed`, `should_fail`, or similar methods."]
+pub struct InstantiateOutcome {
+    address: Addr,
+    outcome: TxOutcome,
+}
+
+pub struct InstantiateOutcomeSuccess {
+    pub address: Addr,
+    pub outcome: TxSuccess,
+}
+
+impl ResultExt for InstantiateOutcome {
+    type Error = TxError;
+    type Success = InstantiateOutcomeSuccess;
+
+    fn should_succeed(self) -> Self::Success {
+        InstantiateOutcomeSuccess {
+            address: self.address,
+            outcome: self.outcome.should_succeed(),
+        }
+    }
+
+    fn should_fail(self) -> Self::Error {
+        self.outcome.should_fail()
+    }
+}
+
+// ------------------------ UploadAndInstantiateOutcome ------------------------
+
+#[must_use = "`UploadAndInstantiateOutcome` must be checked for success or error with `should_succeed`, `should_fail`, or similar methods."]
+pub struct UploadAndInstantiateOutcome {
+    code_hash: Hash256,
+    address: Addr,
+    outcome: TxOutcome,
+}
+
+pub struct UploadAndInstantiateOutcomeSuccess {
+    pub address: Addr,
+    pub code_hash: Hash256,
+    pub outcome: TxSuccess,
+}
+
+impl ResultExt for UploadAndInstantiateOutcome {
+    type Error = TxError;
+    type Success = UploadAndInstantiateOutcomeSuccess;
+
+    fn should_succeed(self) -> Self::Success {
+        UploadAndInstantiateOutcomeSuccess {
+            address: self.address,
+            code_hash: self.code_hash,
+            outcome: self.outcome.should_succeed(),
+        }
+    }
+
+    fn should_fail(self) -> Self::Error {
+        self.outcome.should_fail()
+    }
+}
+
+// --------------------------------- TestSuite ---------------------------------
+
+pub struct TestSuite<DB = MemDb, VM = RustVm, PP = NaiveProposalPreparer, ID = NullIndexer>
 where
     DB: Db,
     VM: Vm,
+    PP: ProposalPreparer,
+    ID: Indexer,
 {
-    pub app: App<DB, VM>,
+    pub app: App<DB, VM, PP, ID>,
     /// The chain ID can be queries from the `app`, but we internally track it in
     /// the test suite, so we don't need to query it every time we need it.
     pub chain_id: String,
@@ -29,7 +126,7 @@ where
     /// previous block's time plus this value.
     pub block_time: Duration,
     /// Transaction gas limit to use if user doesn't specify one.
-    default_gas_limit: u64,
+    pub default_gas_limit: u64,
 }
 
 impl TestSuite {
@@ -43,7 +140,7 @@ impl TestSuite {
         default_gas_limit: u64,
         genesis_block: BlockInfo,
         genesis_state: GenesisState,
-    ) -> anyhow::Result<Self> {
+    ) -> Self {
         Self::new_with_vm(
             RustVm::new(),
             chain_id,
@@ -55,12 +152,13 @@ impl TestSuite {
     }
 }
 
-impl<VM> TestSuite<MemDb, VM>
+impl<VM> TestSuite<MemDb, VM, NaiveProposalPreparer, NullIndexer>
 where
-    VM: Vm + Clone,
+    VM: Vm + Clone + 'static,
     AppError: From<VM::Error>,
 {
-    /// Create a new test suite with `MemDb` and the given VM.
+    /// Create a new test suite with `MemDb`, `NaiveProposalPreparer`, and the
+    /// given VM.
     pub fn new_with_vm(
         vm: VM,
         chain_id: String,
@@ -68,10 +166,12 @@ where
         default_gas_limit: u64,
         genesis_block: BlockInfo,
         genesis_state: GenesisState,
-    ) -> anyhow::Result<Self> {
-        Self::new_with_db_and_vm(
+    ) -> Self {
+        Self::new_with_db_vm_indexer_and_pp(
             MemDb::new(),
             vm,
+            NaiveProposalPreparer,
+            NullIndexer,
             chain_id,
             block_time,
             default_gas_limit,
@@ -81,98 +181,183 @@ where
     }
 }
 
-impl<DB, VM> TestSuite<DB, VM>
+impl<PP> TestSuite<MemDb, RustVm, PP, NullIndexer>
 where
-    DB: Db,
-    VM: Vm + Clone,
-    AppError: From<DB::Error> + From<VM::Error>,
+    PP: ProposalPreparer,
+    AppError: From<PP::Error>,
 {
-    /// Create a new test suite with the given DB and VM.
-    pub fn new_with_db_and_vm(
-        db: DB,
-        vm: VM,
+    /// Create a new test suite with `MemDb`, `RustVm`, and the given proposal
+    /// preparer.
+    pub fn new_with_pp(
+        pp: PP,
         chain_id: String,
         block_time: Duration,
         default_gas_limit: u64,
         genesis_block: BlockInfo,
         genesis_state: GenesisState,
-    ) -> anyhow::Result<Self> {
+    ) -> Self {
+        Self::new_with_db_vm_indexer_and_pp(
+            MemDb::new(),
+            RustVm::new(),
+            pp,
+            NullIndexer,
+            chain_id,
+            block_time,
+            default_gas_limit,
+            genesis_block,
+            genesis_state,
+        )
+    }
+}
+
+impl<DB, VM, PP, ID> TestSuite<DB, VM, PP, ID>
+where
+    DB: Db,
+    VM: Vm + Clone + 'static,
+    PP: ProposalPreparer,
+    ID: Indexer,
+    AppError: From<DB::Error> + From<VM::Error> + From<PP::Error> + From<ID::Error>,
+{
+    /// Create a new test suite with the given DB and VM.
+    pub fn new_with_db_vm_indexer_and_pp(
+        db: DB,
+        vm: VM,
+        pp: PP,
+        mut id: ID,
+        chain_id: String,
+        block_time: Duration,
+        default_gas_limit: u64,
+        genesis_block: BlockInfo,
+        genesis_state: GenesisState,
+    ) -> Self {
+        // This is doing the same order as in Dango.
+        // 1. Calling `start` on the indexer
+
+        let previous_block_height = if let 0 | 1 = genesis_block.height {
+            None
+        } else {
+            Some(genesis_block.height - 1)
+        };
+
+        let state_storage = db
+            .state_storage(previous_block_height)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "Fatal error while getting the state storage: {}",
+                    err.to_string()
+                );
+            });
+
+        id.start(&state_storage).unwrap_or_else(|err| {
+            panic!(
+                "fatal error while running indexer start: {}",
+                err.to_string()
+            );
+        });
+
+        // 2. Creating the app instance
         // Use `u64::MAX` as query gas limit so that there's practically no limit.
-        let app = App::new(db, vm, u64::MAX);
+        let app = App::new(db, vm, pp, id, u64::MAX);
 
-        app.do_init_chain(chain_id.clone(), genesis_block, genesis_state)?;
+        app.do_init_chain(chain_id.clone(), genesis_block, genesis_state)
+            .unwrap_or_else(|err| {
+                panic!("fatal error while initializing chain: {err}");
+            });
 
-        Ok(Self {
+        Self {
             app,
             chain_id,
             block: genesis_block,
             block_time,
             default_gas_limit,
-        })
+        }
     }
 
     /// Simulate the gas cost and event outputs of an unsigned transaction.
-    pub fn simulate_tx(&self, unsigned_tx: UnsignedTx) -> anyhow::Result<TxOutcome> {
-        Ok(self.app.do_simulate(unsigned_tx, 0, false)?)
+    pub fn simulate_tx(&self, unsigned_tx: UnsignedTx) -> TxOutcome {
+        self.app
+            .do_simulate(unsigned_tx, 0, false)
+            .unwrap_or_else(|err| {
+                panic!("fatal error while simulating tx: {err}");
+            })
     }
 
     /// Perform ABCI `CheckTx` call of a transaction.
-    pub fn check_tx(&self, tx: Tx) -> anyhow::Result<Outcome> {
-        Ok(self.app.do_check_tx(tx)?)
+    pub fn check_tx(&self, tx: Tx) -> CheckTxOutcome {
+        self.app
+            .do_check_tx(tx)
+            .unwrap_or_else(|err| panic!("fatal error while checking tx: {err}"))
     }
 
     /// Make a new block without any transaction.
-    pub fn make_empty_block(&mut self) -> anyhow::Result<BlockOutcome> {
+    pub fn make_empty_block(&mut self) -> BlockOutcome {
         self.make_block(vec![])
     }
 
     /// Make a new block with the given transactions.
-    pub fn make_block(&mut self, txs: Vec<Tx>) -> anyhow::Result<BlockOutcome> {
-        let num_txs = txs.len();
-
+    pub fn make_block(&mut self, txs: Vec<Tx>) -> BlockOutcome {
         // Advance block height and time
         self.block.height += 1;
         self.block.timestamp = self.block.timestamp + self.block_time;
 
-        // Call ABCI `FinalizeBlock` method
-        let block_outcome = self.app.do_finalize_block(self.block, txs)?;
+        // Prepare proposal
+        let raw_txs = txs
+            .into_iter()
+            .map(|tx| tx.to_json_vec().unwrap().into())
+            .collect();
+        let txs = self
+            .app
+            .do_prepare_proposal(raw_txs, usize::MAX)
+            .into_iter()
+            .map(|raw_tx| raw_tx.deserialize_json().unwrap())
+            .collect();
 
-        // Sanity check: the number of tx results returned by the app should
-        // equal the number of txs.
-        ensure!(
-            num_txs == block_outcome.tx_outcomes.len(),
-            "sent {} txs but received {} tx results; something is wrong",
-            num_txs,
-            block_outcome.tx_outcomes.len()
-        );
+        let block = Block {
+            info: self.block,
+            txs,
+        };
+
+        // Call ABCI `FinalizeBlock` method
+        let block_outcome = self.app.do_finalize_block(block).unwrap_or_else(|err| {
+            panic!("fatal error while finalizing block: {err}");
+        });
 
         // Call ABCI `Commit` method
-        self.app.do_commit()?;
+        self.app.do_commit().unwrap_or_else(|err| {
+            panic!("fatal error while committing block: {err}");
+        });
 
-        Ok(block_outcome)
+        block_outcome
     }
 
     /// Execute a single transaction.
-    pub fn send_transaction(&mut self, tx: Tx) -> anyhow::Result<TxOutcome> {
-        let mut block_outcome = self.make_block(vec![tx])?;
+    pub fn send_transaction(&mut self, tx: Tx) -> TxOutcome {
+        let mut block_outcome = self.make_block(vec![tx]);
 
-        // Sanity check: we sent one transaction, so there should be exactly one
-        // transaction outcome in the block outcome.
-        ensure!(
-            block_outcome.tx_outcomes.len() == 1,
-            "expecting exactly one transaction outcome, got {}; something is wrong!",
-            block_outcome.tx_outcomes.len()
-        );
+        block_outcome.tx_outcomes.pop().unwrap()
+    }
 
-        Ok(block_outcome.tx_outcomes.pop().unwrap())
+    /// Sign a transaction with the default gas limit.
+    pub fn sign_transaction(&self, signer: &mut dyn Signer, msgs: NonEmpty<Vec<Message>>) -> Tx {
+        self.sign_transaction_with_gas(signer, self.default_gas_limit, msgs)
+    }
+
+    /// Sign a transaction with the given gas limit.
+    pub fn sign_transaction_with_gas(
+        &self,
+        signer: &mut dyn Signer,
+        gas_limit: u64,
+        msgs: NonEmpty<Vec<Message>>,
+    ) -> Tx {
+        signer
+            .sign_transaction(msgs, &self.chain_id, gas_limit)
+            .unwrap_or_else(|err| {
+                panic!("fatal error while signing tx: {err}");
+            })
     }
 
     /// Execute a single message.
-    pub fn send_message(
-        &mut self,
-        signer: &mut dyn Signer,
-        msg: Message,
-    ) -> anyhow::Result<TxOutcome> {
+    pub fn send_message(&mut self, signer: &mut dyn Signer, msg: Message) -> TxOutcome {
         self.send_message_with_gas(signer, self.default_gas_limit, msg)
     }
 
@@ -182,16 +367,16 @@ where
         signer: &mut dyn Signer,
         gas_limit: u64,
         msg: Message,
-    ) -> anyhow::Result<TxOutcome> {
-        self.send_messages_with_gas(signer, gas_limit, vec![msg])
+    ) -> TxOutcome {
+        self.send_messages_with_gas(signer, gas_limit, NonEmpty::new_unchecked(vec![msg]))
     }
 
     /// Execute one or more messages.
     pub fn send_messages(
         &mut self,
         signer: &mut dyn Signer,
-        msgs: Vec<Message>,
-    ) -> anyhow::Result<TxOutcome> {
+        msgs: NonEmpty<Vec<Message>>,
+    ) -> TxOutcome {
         self.send_messages_with_gas(signer, self.default_gas_limit, msgs)
     }
 
@@ -200,43 +385,44 @@ where
         &mut self,
         signer: &mut dyn Signer,
         gas_limit: u64,
-        msgs: Vec<Message>,
-    ) -> anyhow::Result<TxOutcome> {
-        ensure!(!msgs.is_empty(), "please send more than zero messages");
-
-        // Compose and sign a single message
-        let tx = signer.sign_transaction(msgs, &self.chain_id, gas_limit)?;
-
-        self.send_transaction(tx)
+        msgs: NonEmpty<Vec<Message>>,
+    ) -> TxOutcome {
+        self.send_transaction(self.sign_transaction_with_gas(signer, gas_limit, msgs))
     }
 
     /// Update the chain's config.
-    pub fn configure(
+    pub fn configure<T>(
         &mut self,
         signer: &mut dyn Signer,
-        updates: ConfigUpdates,
-        app_updates: BTreeMap<String, Op<Json>>,
-    ) -> anyhow::Result<()> {
-        self.configure_with_gas(signer, self.default_gas_limit, updates, app_updates)
+        new_cfg: Option<Config>,
+        new_app_cfg: Option<T>,
+    ) -> TxOutcome
+    where
+        T: Serialize,
+    {
+        self.configure_with_gas(signer, self.default_gas_limit, new_cfg, new_app_cfg)
     }
 
     /// Update the chain's config under the given gas limit.
-    pub fn configure_with_gas(
+    pub fn configure_with_gas<T>(
         &mut self,
         signer: &mut dyn Signer,
         gas_limit: u64,
-        updates: ConfigUpdates,
-        app_updates: BTreeMap<String, Op<Json>>,
-    ) -> anyhow::Result<()> {
-        self.send_message_with_gas(signer, gas_limit, Message::configure(updates, app_updates))?
-            .result
-            .should_succeed();
-
-        Ok(())
+        new_cfg: Option<Config>,
+        new_app_cfg: Option<T>,
+    ) -> TxOutcome
+    where
+        T: Serialize,
+    {
+        self.send_message_with_gas(
+            signer,
+            gas_limit,
+            Message::configure(new_cfg, new_app_cfg).unwrap(),
+        )
     }
 
     /// Make a transfer of tokens.
-    pub fn transfer<C>(&mut self, signer: &mut dyn Signer, to: Addr, coins: C) -> anyhow::Result<()>
+    pub fn transfer<C>(&mut self, signer: &mut dyn Signer, to: Addr, coins: C) -> TxOutcome
     where
         C: TryInto<Coins>,
         StdError: From<C::Error>,
@@ -251,20 +437,16 @@ where
         gas_limit: u64,
         to: Addr,
         coins: C,
-    ) -> anyhow::Result<()>
+    ) -> TxOutcome
     where
         C: TryInto<Coins>,
         StdError: From<C::Error>,
     {
-        self.send_message_with_gas(signer, gas_limit, Message::transfer(to, coins)?)?
-            .result
-            .should_succeed();
-
-        Ok(())
+        self.send_message_with_gas(signer, gas_limit, Message::transfer(to, coins).unwrap())
     }
 
     /// Upload a code. Return the code's hash.
-    pub fn upload<B>(&mut self, signer: &mut dyn Signer, code: B) -> anyhow::Result<Hash256>
+    pub fn upload<B>(&mut self, signer: &mut dyn Signer, code: B) -> UploadOutcome
     where
         B: Into<Binary>,
     {
@@ -277,35 +459,32 @@ where
         signer: &mut dyn Signer,
         gas_limit: u64,
         code: B,
-    ) -> anyhow::Result<Hash256>
+    ) -> UploadOutcome
     where
         B: Into<Binary>,
     {
         let code = code.into();
         let code_hash = Hash256::from_inner(sha2_256(&code));
 
-        self.send_message_with_gas(signer, gas_limit, Message::upload(code))?
-            .result
-            .should_succeed();
+        let outcome = self.send_message_with_gas(signer, gas_limit, Message::upload(code));
 
-        Ok(code_hash)
+        UploadOutcome { code_hash, outcome }
     }
 
     /// Instantiate a contract. Return the contract's address.
-    pub fn instantiate<M, S, C, L>(
+    pub fn instantiate<M, S, C>(
         &mut self,
         signer: &mut dyn Signer,
         code_hash: Hash256,
         msg: &M,
         salt: S,
-        label: Option<L>,
+        label: Option<&str>,
         admin: Option<Addr>,
         funds: C,
-    ) -> anyhow::Result<Addr>
+    ) -> InstantiateOutcome
     where
         M: Serialize,
         S: Into<Binary>,
-        L: Into<String>,
         C: TryInto<Coins>,
         StdError: From<C::Error>,
     {
@@ -323,36 +502,33 @@ where
 
     /// Instantiate a contract under the given gas limit. Return the contract's
     /// address.
-    pub fn instantiate_with_gas<M, S, L, C>(
+    pub fn instantiate_with_gas<M, S, C>(
         &mut self,
         signer: &mut dyn Signer,
         gas_limit: u64,
         code_hash: Hash256,
         msg: &M,
         salt: S,
-        label: Option<L>,
+        label: Option<&str>,
         admin: Option<Addr>,
         funds: C,
-    ) -> anyhow::Result<Addr>
+    ) -> InstantiateOutcome
     where
         M: Serialize,
         S: Into<Binary>,
-        L: Into<String>,
         C: TryInto<Coins>,
         StdError: From<C::Error>,
     {
         let salt = salt.into();
         let address = Addr::derive(signer.address(), code_hash, &salt);
 
-        self.send_message_with_gas(
+        let outcome = self.send_message_with_gas(
             signer,
             gas_limit,
-            Message::instantiate(code_hash, msg, salt, label, admin, funds)?,
-        )?
-        .result
-        .should_succeed();
+            Message::instantiate(code_hash, msg, salt, label, admin, funds).unwrap(),
+        );
 
-        Ok(address)
+        InstantiateOutcome { address, outcome }
     }
 
     /// Upload a code and instantiate a contract with it in one go. Return the
@@ -366,7 +542,7 @@ where
         label: Option<L>,
         admin: Option<Addr>,
         funds: C,
-    ) -> anyhow::Result<(Hash256, Addr)>
+    ) -> UploadAndInstantiateOutcome
     where
         M: Serialize,
         B: Into<Binary>,
@@ -399,7 +575,7 @@ where
         label: Option<L>,
         admin: Option<Addr>,
         funds: C,
-    ) -> anyhow::Result<(Hash256, Addr)>
+    ) -> UploadAndInstantiateOutcome
     where
         M: Serialize,
         B: Into<Binary>,
@@ -413,14 +589,20 @@ where
         let salt = salt.into();
         let address = Addr::derive(signer.address(), code_hash, &salt);
 
-        self.send_messages_with_gas(signer, gas_limit, vec![
-            Message::upload(code),
-            Message::instantiate(code_hash, msg, salt, label, admin, funds)?,
-        ])?
-        .result
-        .should_succeed();
+        let outcome = self.send_messages_with_gas(
+            signer,
+            gas_limit,
+            NonEmpty::new_unchecked(vec![
+                Message::upload(code),
+                Message::instantiate(code_hash, msg, salt, label, admin, funds).unwrap(),
+            ]),
+        );
 
-        Ok((code_hash, address))
+        UploadAndInstantiateOutcome {
+            address,
+            code_hash,
+            outcome,
+        }
     }
 
     /// Execute a contrat.
@@ -430,7 +612,7 @@ where
         contract: Addr,
         msg: &M,
         funds: C,
-    ) -> anyhow::Result<()>
+    ) -> TxOutcome
     where
         M: Serialize,
         C: TryInto<Coins>,
@@ -447,17 +629,17 @@ where
         contract: Addr,
         msg: &M,
         funds: C,
-    ) -> anyhow::Result<()>
+    ) -> TxOutcome
     where
         M: Serialize,
         C: TryInto<Coins>,
         StdError: From<C::Error>,
     {
-        self.send_message_with_gas(signer, gas_limit, Message::execute(contract, msg, funds)?)?
-            .result
-            .should_succeed();
-
-        Ok(())
+        self.send_message_with_gas(
+            signer,
+            gas_limit,
+            Message::execute(contract, msg, funds).unwrap(),
+        )
     }
 
     /// Migrate a contract to a new code hash.
@@ -467,7 +649,7 @@ where
         contract: Addr,
         new_code_hash: Hash256,
         msg: &M,
-    ) -> anyhow::Result<()>
+    ) -> TxOutcome
     where
         M: Serialize,
     {
@@ -482,202 +664,115 @@ where
         contract: Addr,
         new_code_hash: Hash256,
         msg: &M,
-    ) -> anyhow::Result<()>
+    ) -> TxOutcome
     where
         M: Serialize,
     {
         self.send_message_with_gas(
             signer,
             gas_limit,
-            Message::migrate(contract, new_code_hash, msg)?,
-        )?
-        .result
-        .should_succeed();
-
-        Ok(())
+            Message::migrate(contract, new_code_hash, msg).unwrap(),
+        )
     }
 
-    pub fn query_config(&self) -> anyhow::Result<Config> {
+    pub fn query_config(&self) -> AppResult<Config> {
         self.app
-            .do_query_app(Query::Config {}, 0, false)
+            .do_query_app(Query::config(), 0, false)
             .map(|val| val.as_config())
-            .map_err(Into::into)
     }
 
-    pub fn query_app_config(&self, key: &str) -> anyhow::Result<Json> {
+    pub fn query_app_config<T>(&self) -> AppResult<T>
+    where
+        T: DeserializeOwned,
+    {
         self.app
-            .do_query_app(
-                Query::AppConfig {
-                    key: key.to_string(),
-                },
-                0,
-                false,
-            )
-            .map(|res| res.as_app_config())
-            .map_err(Into::into)
+            .do_query_app(Query::app_config(), 0, false)
+            .map(|res| res.as_app_config().deserialize_json().unwrap())
     }
 
-    pub fn query_app_configs(&self) -> anyhow::Result<BTreeMap<String, Json>> {
-        self.app
-            .do_query_app(
-                Query::AppConfigs {
-                    start_after: None,
-                    limit: Some(u32::MAX),
-                },
-                0,
-                false,
-            )
-            .map(|res| res.as_app_configs())
-            .map_err(Into::into)
-    }
-
-    pub fn query_balance<D>(&self, account: &dyn Addressable, denom: D) -> anyhow::Result<Uint128>
+    pub fn query_balance<D>(&self, account: &dyn Addressable, denom: D) -> AppResult<Uint128>
     where
         D: TryInto<Denom>,
-        D::Error: Error + Send + Sync + 'static,
+        D::Error: Debug,
     {
-        let denom = denom.try_into()?;
-
         self.app
             .do_query_app(
-                Query::Balance {
-                    address: account.address(),
-                    denom,
-                },
+                Query::balance(account.address(), denom.try_into().unwrap()),
                 0, // zero means to use the latest height
                 false,
             )
             .map(|res| res.as_balance().amount)
-            .map_err(Into::into)
     }
 
-    pub fn query_balances(&self, account: &dyn Addressable) -> anyhow::Result<Coins> {
+    pub fn query_balances(&self, account: &dyn Addressable) -> AppResult<Coins> {
         self.app
             .do_query_app(
-                Query::Balances {
-                    address: account.address(),
-                    start_after: None,
-                    limit: Some(u32::MAX),
-                },
+                Query::balances(account.address(), None, Some(u32::MAX)),
                 0, // zero means to use the latest height
                 false,
             )
             .map(|res| res.as_balances())
-            .map_err(Into::into)
     }
 
-    pub fn query_supply<D>(&self, denom: D) -> anyhow::Result<Uint128>
+    pub fn query_supply<D>(&self, denom: D) -> AppResult<Uint128>
     where
         D: TryInto<Denom>,
-        D::Error: Error + Send + Sync + 'static,
+        D::Error: Debug,
     {
-        let denom = denom.try_into()?;
-
         self.app
-            .do_query_app(Query::Supply { denom }, 0, false)
+            .do_query_app(Query::supply(denom.try_into().unwrap()), 0, false)
             .map(|res| res.as_supply().amount)
-            .map_err(Into::into)
     }
 
-    pub fn query_supplies(&self) -> anyhow::Result<Coins> {
+    pub fn query_supplies(&self) -> AppResult<Coins> {
         self.app
-            .do_query_app(
-                Query::Supplies {
-                    start_after: None,
-                    limit: Some(u32::MAX),
-                },
-                0,
-                false,
-            )
+            .do_query_app(Query::supplies(None, Some(u32::MAX)), 0, false)
             .map(|res| res.as_supplies())
-            .map_err(Into::into)
     }
 
-    pub fn query_code(&self, hash: Hash256) -> anyhow::Result<Binary> {
+    pub fn query_code(&self, hash: Hash256) -> AppResult<Code> {
         self.app
-            .do_query_app(Query::Code { hash }, 0, false)
+            .do_query_app(Query::code(hash), 0, false)
             .map(|res| res.as_code())
-            .map_err(Into::into)
     }
 
-    pub fn query_codes(&self) -> anyhow::Result<BTreeMap<Hash256, Binary>> {
+    pub fn query_codes(&self) -> AppResult<BTreeMap<Hash256, Code>> {
         self.app
-            .do_query_app(
-                Query::Codes {
-                    start_after: None,
-                    limit: Some(u32::MAX),
-                },
-                0,
-                false,
-            )
+            .do_query_app(Query::codes(None, Some(u32::MAX)), 0, false)
             .map(|res| res.as_codes())
-            .map_err(Into::into)
     }
 
-    pub fn query_contract(&self, contract: &dyn Addressable) -> anyhow::Result<ContractInfo> {
+    pub fn query_contract(&self, contract: &dyn Addressable) -> AppResult<ContractInfo> {
         self.app
-            .do_query_app(
-                Query::Contract {
-                    address: contract.address(),
-                },
-                0,
-                false,
-            )
+            .do_query_app(Query::contract(contract.address()), 0, false)
             .map(|res| res.as_contract())
-            .map_err(Into::into)
     }
 
-    pub fn query_contracts(&self) -> anyhow::Result<BTreeMap<Addr, ContractInfo>> {
+    pub fn query_contracts(&self) -> AppResult<BTreeMap<Addr, ContractInfo>> {
         self.app
-            .do_query_app(
-                Query::Contracts {
-                    start_after: None,
-                    limit: Some(u32::MAX),
-                },
-                0,
-                false,
-            )
+            .do_query_app(Query::contracts(None, Some(u32::MAX)), 0, false)
             .map(|res| res.as_contracts())
-            .map_err(Into::into)
     }
 
-    pub fn query_wasm_raw<B>(&self, contract: Addr, key: B) -> anyhow::Result<Option<Binary>>
+    pub fn query_wasm_raw<B>(&self, contract: Addr, key: B) -> AppResult<Option<Binary>>
     where
         B: Into<Binary>,
     {
         self.app
-            .do_query_app(
-                Query::WasmRaw {
-                    contract,
-                    key: key.into(),
-                },
-                0,
-                false,
-            )
+            .do_query_app(Query::wasm_raw(contract, key), 0, false)
             .map(|res| res.as_wasm_raw())
-            .map_err(Into::into)
     }
 
-    pub fn query_wasm_smart<R>(&self, contract: Addr, req: R) -> anyhow::Result<R::Response>
+    pub fn query_wasm_smart<R>(&self, contract: Addr, req: R) -> AppResult<R::Response>
     where
         R: QueryRequest,
         R::Message: Serialize,
         R::Response: DeserializeOwned + Debug,
     {
         let msg = R::Message::from(req);
-        let msg_raw = msg.to_json_value()?;
 
         self.app
-            .do_query_app(
-                Query::WasmSmart {
-                    contract,
-                    msg: msg_raw,
-                },
-                0, // zero means to use the latest height
-                false,
-            )?
-            .as_wasm_smart()
-            .deserialize_json()
-            .map_err(Into::into)
+            .do_query_app(Query::wasm_smart(contract, &msg)?, 0, false)
+            .map(|res| res.as_wasm_smart().deserialize_json().unwrap())
     }
 }

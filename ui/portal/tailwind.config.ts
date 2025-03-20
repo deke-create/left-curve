@@ -1,8 +1,8 @@
-import { tailwindConfig } from "@leftcurve/config/tailwind/config";
+import { tailwindConfig } from "@dango/config/tailwind/config.js";
 import type { Config } from "tailwindcss";
 
 const config: Config = {
-  content: ["./src/**/*.{js,ts,jsx,tsx,mdx}", "./node_modules/@dango/shared/**/*.{js,ts,jsx,tsx}"],
+  content: ["./src/**/*.{js,ts,jsx,tsx,mdx}", "../shared/src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {},
   },

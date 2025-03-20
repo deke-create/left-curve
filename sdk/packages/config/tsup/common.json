@@ -1,10 +1,13 @@
 {
-  "dts": true,
-  "shims": true,
-  "bundle": true,
+  "dts": {
+    "compilerOptions": {
+      "composite": false
+    }
+  },
+  "bundle": false,
   "outDir": "build",
   "platform": "neutral",
-  "target": "esnext",
-  "format": ["esm", "cjs"],
-  "treeshake": "recommended"
+  "format": ["cjs", "esm"],
+  "treeshake": false,
+  "splitting": false
 }

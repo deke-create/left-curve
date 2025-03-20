@@ -3,7 +3,7 @@ use {
         account_factory::{AccountIndex, Username},
         auth::Key,
     },
-    grug::{Binary, Hash160},
+    grug::{Binary, Hash256},
 };
 
 // ------------------------------- new user salt -------------------------------
@@ -22,10 +22,10 @@ use {
 pub struct NewUserSalt<'a> {
     pub username: &'a Username,
     pub key: Key,
-    pub key_hash: Hash160,
+    pub key_hash: Hash256,
 }
 
-impl<'a> NewUserSalt<'a> {
+impl NewUserSalt<'_> {
     /// Convert the salt to raw binary, as follows:
     ///
     /// ```plain
@@ -46,11 +46,11 @@ impl<'a> NewUserSalt<'a> {
         // Maximum possible length for the bytes:
         // - len(username): 1
         // - username: 15
-        // - key_hash: 20
+        // - key_hash: 32
         // - key_tag: 1
         // - key: 33
-        // Total: 70 bytes.
-        let mut bytes = Vec::with_capacity(70);
+        // Total: 82 bytes.
+        let mut bytes = Vec::with_capacity(82);
         bytes.push(self.username.len());
         bytes.extend_from_slice(self.username.as_ref());
         bytes.extend_from_slice(&self.key_hash);
@@ -61,10 +61,6 @@ impl<'a> NewUserSalt<'a> {
             },
             Key::Secp256k1(pk) => {
                 bytes.push(1);
-                bytes.extend_from_slice(&pk);
-            },
-            Key::Ed25519(pk) => {
-                bytes.push(2);
                 bytes.extend_from_slice(&pk);
             },
         }

@@ -1,8 +1,7 @@
 use {
     grug_testing::TestBuilder,
-    grug_types::{btree_map, Coin, Coins, ConfigUpdates, Duration, ResultExt, Timestamp},
+    grug_types::{btree_map, Binary, Coin, Coins, Duration, Empty, Json, ResultExt, Timestamp},
     grug_vm_rust::ContractBuilder,
-    std::collections::BTreeMap,
 };
 
 /// A contract that implements the `cron_execute` export function. Used for
@@ -39,6 +38,30 @@ mod tester {
     }
 }
 
+/// A cronjob contract that intentionally fails during `cron_execute`. Used for
+/// testing whether the app can correctly handle revert failing cronjobs state changes.
+mod failing_tester {
+    use {
+        grug_math::{Number, NumberConst, Uint128},
+        grug_types::{Empty, MutableCtx, Response, StdResult, SudoCtx},
+    };
+
+    pub fn instantiate(ctx: MutableCtx, _: Empty) -> StdResult<Response> {
+        ctx.storage.write(b"foo", b"init");
+
+        Ok(Response::new())
+    }
+
+    pub fn cron_execute(ctx: SudoCtx) -> StdResult<Response> {
+        ctx.storage.write(b"foo", b"cron_execute");
+
+        // This should fail.
+        let _ = Uint128::ONE.checked_div(Uint128::ZERO)?;
+
+        Ok(Response::new())
+    }
+}
+
 struct Balances {
     uatom: u128,
     uosmo: u128,
@@ -49,15 +72,11 @@ struct Balances {
 fn cronjob_works() {
     let (mut suite, mut accounts) = TestBuilder::new()
         .add_account("larry", [("uatom", 100), ("uosmo", 100), ("umars", 100)])
-        .unwrap()
         .add_account("jake", Coins::new())
-        .unwrap()
         .set_genesis_time(Timestamp::from_nanos(0))
         .set_block_time(Duration::from_seconds(1))
         .set_owner("larry")
-        .unwrap()
-        .build()
-        .unwrap();
+        .build();
 
     let tester_code = ContractBuilder::new(Box::new(tester::instantiate))
         .with_cron_execute(Box::new(tester::cron_execute))
@@ -69,8 +88,9 @@ fn cronjob_works() {
     //
     // Upload the tester contract code.
     let tester_code_hash = suite
-        .upload(accounts.get_mut("larry").unwrap(), tester_code)
-        .unwrap();
+        .upload(&mut accounts["larry"], tester_code)
+        .should_succeed()
+        .code_hash;
 
     // Block time: 2
     //
@@ -78,7 +98,7 @@ fn cronjob_works() {
     // Each contract is given an initial coin balance.
     let cron1 = suite
         .instantiate(
-            accounts.get_mut("larry").unwrap(),
+            &mut accounts["larry"],
             tester_code_hash,
             &tester::Job {
                 receiver,
@@ -89,12 +109,13 @@ fn cronjob_works() {
             None,
             Coins::one("uatom", 3).unwrap(),
         )
-        .unwrap();
+        .should_succeed()
+        .address;
 
     // Block time: 3
     let cron2 = suite
         .instantiate(
-            accounts.get_mut("larry").unwrap(),
+            &mut accounts["larry"],
             tester_code_hash,
             &tester::Job {
                 receiver,
@@ -105,12 +126,13 @@ fn cronjob_works() {
             None,
             Coins::one("uosmo", 3).unwrap(),
         )
-        .unwrap();
+        .should_succeed()
+        .address;
 
     // Block time: 4
     let cron3 = suite
         .instantiate(
-            accounts.get_mut("larry").unwrap(),
+            &mut accounts["larry"],
             tester_code_hash,
             &tester::Job {
                 receiver,
@@ -121,27 +143,26 @@ fn cronjob_works() {
             None,
             Coins::one("umars", 3).unwrap(),
         )
-        .unwrap();
+        .should_succeed()
+        .address;
 
     // Block time: 5
     //
     // Update the config to add the cronjobs.
-    let updates = ConfigUpdates {
-        cronjobs: Some(btree_map! {
-            // cron1 has interval of 0, meaning it's to be called every block.
-            cron1 => Duration::from_seconds(0),
-            cron2 => Duration::from_seconds(2),
-            cron3 => Duration::from_seconds(3),
-        }),
-        ..Default::default()
+    let mut new_cfg = suite.query_config().unwrap();
+    new_cfg.cronjobs = btree_map! {
+        // cron1 has interval of 0, meaning it's to be called every block.
+        cron1 => Duration::from_seconds(0),
+        cron2 => Duration::from_seconds(2),
+        cron3 => Duration::from_seconds(3),
     };
 
     // cron1 scheduled at 5
     // cron2 scheduled at 7
     // cron3 scheduled at 8
     suite
-        .configure(accounts.get_mut("larry").unwrap(), updates, BTreeMap::new())
-        .unwrap();
+        .configure::<Json>(&mut accounts["larry"], Some(new_cfg), None)
+        .should_succeed();
 
     // Make some blocks.
     // After each block, check that Jake has the correct balances.
@@ -237,10 +258,68 @@ fn cronjob_works() {
             .unwrap();
 
         // Advance block
-        suite.make_empty_block().unwrap();
+        suite.make_empty_block();
 
         // Check the balances are correct
-        let actual = suite.query_balances(&accounts["jake"]).should_succeed();
-        assert_eq!(actual, expect);
+        suite
+            .query_balances(&accounts["jake"])
+            .should_succeed_and_equal(expect);
     }
+}
+
+#[test]
+fn cronjob_fails() {
+    let (mut suite, mut accounts) = TestBuilder::new()
+        .add_account("larry", Coins::new())
+        .set_genesis_time(Timestamp::from_nanos(0))
+        .set_block_time(Duration::from_seconds(1))
+        .set_owner("larry")
+        .build();
+
+    let tester_code = ContractBuilder::new(Box::new(failing_tester::instantiate))
+        .with_cron_execute(Box::new(failing_tester::cron_execute))
+        .build();
+
+    let tester_code_hash = suite
+        .upload(&mut accounts["larry"], tester_code)
+        .should_succeed()
+        .code_hash;
+
+    let cron = suite
+        .instantiate(
+            &mut accounts["larry"],
+            tester_code_hash,
+            &Empty {},
+            "cron1",
+            Some("cron1"),
+            None,
+            Coins::default(),
+        )
+        .should_succeed()
+        .address;
+
+    let mut new_cfg = suite.query_config().unwrap();
+    new_cfg.cronjobs = btree_map! {
+        // cron1 has interval of 0, meaning it's to be called every block.
+        cron => Duration::from_seconds(0),
+    };
+
+    suite
+        .configure::<Json>(&mut accounts["larry"], Some(new_cfg), None)
+        .should_succeed();
+
+    // Before the block, storage key `b"foo"` should have the value `b"init"`.
+    suite
+        .query_wasm_raw(cron, *b"foo")
+        .should_succeed_and_equal(Some(Binary::from(*b"init")));
+
+    // Advance block and trigger the cronjob
+    let res = suite.make_empty_block();
+    assert_eq!(res.cron_outcomes.len(), 1);
+
+    // The cronjob attempts to overwrite the value with `b"cron_execute"`.
+    // But it then fails before returning, so the change it discarded.
+    suite
+        .query_wasm_raw(cron, *b"foo")
+        .should_succeed_and_equal(Some(Binary::from(*b"init")));
 }

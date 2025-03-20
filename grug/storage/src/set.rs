@@ -1,7 +1,7 @@
 use {
-    crate::{Borsh, Codec, PathBuf, Prefix, PrefixBound, Prefixer, PrimaryKey},
+    crate::{Borsh, Codec, Path, Prefix, PrefixBound, Prefixer, PrimaryKey, RawKey},
     grug_types::{Bound, Empty, Order, StdResult, Storage},
-    std::{borrow::Cow, marker::PhantomData},
+    std::marker::PhantomData,
 };
 
 /// Mimic the behavior of HashSet or BTreeSet.
@@ -32,21 +32,21 @@ where
     }
 }
 
-impl<'a, T, C> Set<'a, T, C>
+impl<T, C> Set<'_, T, C>
 where
     T: PrimaryKey,
     C: Codec<Empty>,
 {
     #[doc(hidden)]
-    pub fn path_raw(&self, key_raw: &[u8]) -> PathBuf<Empty, Borsh> {
-        PathBuf::new(self.namespace, &[], Some(&Cow::Borrowed(key_raw)))
+    pub fn path_raw(&self, key_raw: &[u8]) -> Path<Empty, Borsh> {
+        Path::new(self.namespace, &[], Some(RawKey::Borrowed(key_raw)))
     }
 
     #[doc(hidden)]
-    pub fn path(&self, item: T) -> PathBuf<Empty, Borsh> {
+    pub fn path(&self, item: T) -> Path<Empty, Borsh> {
         let mut raw_keys = item.raw_keys();
         let last_raw_key = raw_keys.pop();
-        PathBuf::new(self.namespace, &raw_keys, last_raw_key.as_ref())
+        Path::new(self.namespace, &raw_keys, last_raw_key)
     }
 
     #[doc(hidden)]
@@ -65,11 +65,11 @@ where
     // ---------------------- methods for single entries -----------------------
 
     pub fn has_raw(&self, storage: &dyn Storage, item_raw: &[u8]) -> bool {
-        self.path_raw(item_raw).as_path().exists(storage)
+        self.path_raw(item_raw).exists(storage)
     }
 
     pub fn has(&self, storage: &dyn Storage, item: T) -> bool {
-        self.path(item).as_path().exists(storage)
+        self.path(item).exists(storage)
     }
 
     /// Using this function is not recommended. If the item isn't properly
@@ -79,19 +79,19 @@ where
     /// We prefix the function name with the word "unsafe" to highlight this.
     pub fn unsafe_insert_raw(&self, storage: &mut dyn Storage, item_raw: &[u8]) {
         // `Empty` serializes to empty bytes when using borsh.
-        self.path_raw(item_raw).as_path().save_raw(storage, &[])
+        self.path_raw(item_raw).save_raw(storage, &[])
     }
 
     pub fn insert(&self, storage: &mut dyn Storage, item: T) -> StdResult<()> {
-        self.path(item).as_path().save(storage, &Empty {})
+        self.path(item).save(storage, &Empty {})
     }
 
     pub fn remove_raw(&self, storage: &mut dyn Storage, item_raw: &[u8]) {
-        self.path_raw(item_raw).as_path().remove(storage)
+        self.path_raw(item_raw).remove(storage)
     }
 
     pub fn remove(&self, storage: &mut dyn Storage, item: T) {
-        self.path(item).as_path().remove(storage)
+        self.path(item).remove(storage)
     }
 
     // -------------------- iteration methods (full bound) ---------------------
@@ -177,7 +177,7 @@ mod tests {
         fn all(&self, storage: &mut dyn Storage) -> StdResult<Vec<Self::T>>;
     }
 
-    impl<'a, T, C> SetExt for Set<'a, T, C>
+    impl<T, C> SetExt for Set<'_, T, C>
     where
         T: PrimaryKey,
         C: Codec<Empty>,

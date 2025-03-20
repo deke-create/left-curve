@@ -1,8 +1,8 @@
-import type { Address } from "./address";
-import type { Coins, Funds } from "./coin";
-import type { Duration, Permission } from "./common";
-import type { Credential, Metadata } from "./credential";
-import type { Base64, Hex, Json } from "./encoding";
+import type { Address } from "./address.js";
+import type { Coins, Funds } from "./coin.js";
+import type { Duration, Permission } from "./common.js";
+import type { Credential, Metadata } from "./credential.js";
+import type { Base64, Hex, Json } from "./encoding.js";
 
 export type TxParameters = {
   funds?: Funds;
@@ -20,14 +20,14 @@ export type Tx = {
 export type UnsignedTx = Pick<Tx, "sender" | "msgs">;
 
 export type Message =
-  | { configure: MsgUpdateConfig }
+  | { configure: MsgConfigure }
   | { transfer: MsgTransfer }
   | { upload: MsgStoreCode }
   | { instantiate: MsgInstantiate }
   | { execute: MsgExecute }
   | { migrate: MsgMigrate };
 
-export type MsgUpdateConfig = {
+export type MsgConfigure = {
   updates: ConfigUpdate;
   appUpdates: Record<string, Json>;
 };

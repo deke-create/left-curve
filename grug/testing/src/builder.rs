@@ -1,32 +1,34 @@
 use {
     crate::{tracing::setup_tracing_subscriber, TestAccount, TestAccounts, TestSuite, TestVm},
-    anyhow::{anyhow, ensure},
-    grug_app::AppError,
+    grug_app::{AppError, Db, Indexer, NaiveProposalPreparer, NullIndexer, ProposalPreparer},
     grug_db_memory::MemDb,
     grug_math::Udec128,
     grug_types::{
         Addr, Binary, BlockInfo, Coins, Config, Defined, Denom, Duration, GenesisState, HashExt,
-        Json, JsonSerExt, MaybeDefined, Message, Permission, Permissions, Timestamp, Undefined,
-        GENESIS_BLOCK_HASH, GENESIS_BLOCK_HEIGHT, GENESIS_SENDER,
+        Json, JsonSerExt, MaybeDefined, Message, Permission, Permissions, StdResult, Timestamp,
+        Undefined, GENESIS_BLOCK_HASH, GENESIS_BLOCK_HEIGHT, GENESIS_SENDER,
     },
     grug_vm_rust::RustVm,
     serde::Serialize,
     std::{
         collections::BTreeMap,
+        fmt::Debug,
+        ops::Deref,
         str::FromStr,
         time::{SystemTime, UNIX_EPOCH},
     },
     tracing::Level,
 };
 
-const DEFAULT_TRACING_LEVEL: Level = Level::INFO;
-const DEFAULT_CHAIN_ID: &str = "dev-1";
-const DEFAULT_BLOCK_TIME: Duration = Duration::from_millis(250);
-const DEFAULT_DEFAULT_GAS_LIMIT: u64 = 1_000_000;
-const DEFAULT_BANK_SALT: &str = "bank";
-const DEFAULT_TAXMAN_SALT: &str = "taxman";
-const DEFAULT_FEE_DENOM: &str = "ugrug";
-const DEFAULT_FEE_RATE: &str = "0";
+pub const DEFAULT_TRACING_LEVEL: Level = Level::INFO;
+pub const DEFAULT_CHAIN_ID: &str = "dev-1";
+pub const DEFAULT_BLOCK_TIME: Duration = Duration::from_millis(250);
+pub const DEFAULT_DEFAULT_GAS_LIMIT: u64 = 1_000_000;
+pub const DEFAULT_BANK_SALT: &str = "bank";
+pub const DEFAULT_TAXMAN_SALT: &str = "taxman";
+pub const DEFAULT_FEE_DENOM: &str = "ugrug";
+pub const DEFAULT_FEE_RATE: &str = "0";
+pub const DEFAULT_MAX_ORPHAN_AGE: Duration = Duration::from_seconds(7 * 24 * 60 * 60); // 7 days
 
 // If the user wishes to use a custom code for account, bank, or taxman, they
 // must provide both the binary code, as well as a function for creating the
@@ -37,22 +39,28 @@ struct CodeOption<B> {
 }
 
 pub struct TestBuilder<
+    DB = MemDb,
     VM = RustVm,
+    PP = NaiveProposalPreparer,
+    ID = NullIndexer,
     M1 = grug_mock_account::InstantiateMsg,
     M2 = grug_mock_bank::InstantiateMsg,
     M3 = grug_mock_taxman::InstantiateMsg,
     OW = Undefined<Addr>,
     TA = Undefined<TestAccounts>,
 > {
+    db: DB,
     vm: VM,
+    pp: PP,
+    indexer: ID,
     // Consensus parameters
     tracing_level: Option<Level>,
     chain_id: Option<String>,
     genesis_time: Option<Timestamp>,
     block_time: Option<Duration>,
     default_gas_limit: Option<u64>,
-    // App configs
-    app_configs: BTreeMap<String, Json>,
+    // App config
+    app_config: Json,
     // Owner
     owner: OW,
     // Accounts
@@ -65,22 +73,60 @@ pub struct TestBuilder<
     taxman_opt: CodeOption<Box<dyn FnOnce(Denom, Udec128) -> M3>>,
     fee_denom: Option<Denom>,
     fee_rate: Option<Udec128>,
+    max_orphan_age: Option<Duration>,
 }
 
 // Clippy incorrectly thinks we can derive `Default` here, which we can't.
 #[allow(clippy::new_without_default)]
-impl TestBuilder<RustVm> {
+impl TestBuilder<MemDb, RustVm, NaiveProposalPreparer, NullIndexer> {
     pub fn new() -> Self {
-        Self::new_with_vm(RustVm::new())
+        Self::new_with_vm_and_pp_and_indexer(
+            MemDb::new(),
+            RustVm::new(),
+            NaiveProposalPreparer,
+            NullIndexer,
+        )
     }
 }
 
-impl<VM> TestBuilder<VM>
+impl<VM> TestBuilder<MemDb, VM>
 where
     VM: TestVm,
 {
     pub fn new_with_vm(vm: VM) -> Self {
+        Self::new_with_vm_and_pp_and_indexer(MemDb::new(), vm, NaiveProposalPreparer, NullIndexer)
+    }
+}
+
+impl<ID> TestBuilder<MemDb, RustVm, NaiveProposalPreparer, ID> {
+    pub fn new_with_indexer(indexer: ID) -> Self
+    where
+        ID: Indexer,
+    {
+        Self::new_with_vm_and_pp_and_indexer(
+            MemDb::new(),
+            RustVm::new(),
+            NaiveProposalPreparer,
+            indexer,
+        )
+    }
+}
+
+impl<PP> TestBuilder<MemDb, RustVm, PP> {
+    pub fn new_with_pp(pp: PP) -> Self {
+        Self::new_with_vm_and_pp_and_indexer(MemDb::new(), RustVm::new(), pp, NullIndexer)
+    }
+}
+
+impl<DB, VM, PP, ID> TestBuilder<DB, VM, PP, ID>
+where
+    DB: Db,
+    VM: TestVm,
+    ID: Indexer,
+{
+    pub fn new_with_vm_and_pp_and_indexer(db: DB, vm: VM, pp: PP, indexer: ID) -> Self {
         Self {
+            db,
             account_opt: CodeOption {
                 code: VM::default_account_code(),
                 msg_builder: Box::new(|public_key| grug_mock_account::InstantiateMsg {
@@ -103,28 +149,33 @@ where
                 }),
             },
             vm,
+            pp,
+            indexer,
             tracing_level: Some(DEFAULT_TRACING_LEVEL),
             chain_id: None,
             genesis_time: None,
             block_time: None,
             default_gas_limit: None,
-            app_configs: BTreeMap::new(),
-            owner: Undefined::default(),
-            accounts: Undefined::default(),
+            app_config: Json::null(),
+            owner: Undefined::new(),
+            accounts: Undefined::new(),
             balances: BTreeMap::new(),
             fee_denom: None,
             fee_rate: None,
+            max_orphan_age: None,
         }
     }
 }
 
-impl<VM, M1, M2, M3, OW, TA> TestBuilder<VM, M1, M2, M3, OW, TA>
+impl<DB, VM, PP, ID, M1, M2, M3, OW, TA> TestBuilder<DB, VM, PP, ID, M1, M2, M3, OW, TA>
 where
+    DB: Db,
+    ID: Indexer,
     M1: Serialize,
     M2: Serialize,
     M3: Serialize,
-    OW: MaybeDefined<Inner = Addr>,
-    TA: MaybeDefined<Inner = TestAccounts>,
+    OW: MaybeDefined<Addr>,
+    TA: MaybeDefined<TestAccounts>,
     VM: TestVm + Clone,
     AppError: From<VM::Error>,
 {
@@ -157,8 +208,17 @@ where
         self
     }
 
-    pub fn set_fee_denom(mut self, fee_denom: Denom) -> Self {
-        self.fee_denom = Some(fee_denom);
+    pub fn set_fee_denom<D>(mut self, fee_denom: D) -> Self
+    where
+        D: TryInto<Denom>,
+        D::Error: Debug,
+    {
+        self.fee_denom = Some(fee_denom.try_into().unwrap());
+        self
+    }
+
+    pub fn set_max_orphan_age(mut self, max_orphan_age: Duration) -> Self {
+        self.max_orphan_age = Some(max_orphan_age);
         self
     }
 
@@ -167,21 +227,11 @@ where
         self
     }
 
-    pub fn add_app_config<K, V>(mut self, key: K, value: &V) -> anyhow::Result<Self>
+    pub fn set_app_config<T>(mut self, app_cfg: &T) -> StdResult<Self>
     where
-        K: Into<String>,
-        V: Serialize,
+        T: Serialize,
     {
-        let key = key.into();
-        let value = value.to_json_value()?;
-
-        ensure!(
-            !self.app_configs.contains_key(&key),
-            "app config key `{key}` is already set"
-        );
-
-        self.app_configs.insert(key, value);
-
+        self.app_config = app_cfg.to_json_value()?;
         Ok(self)
     }
 
@@ -207,33 +257,33 @@ where
     ///
     /// let (suite, accounts) = TestBuilder::new()
     ///     .add_account("owner", Coins::new())
-    ///     .unwrap()
     ///     .set_owner("owner")
-    ///     .unwrap()
     ///     .set_bank_code(
     ///         code,
     ///         |initial_balances| grug_mock_bank::InstantiateMsg { initial_balances },
     ///     )
-    ///     .build()
-    ///     .unwrap();
+    ///     .build();
     /// ```
     pub fn set_bank_code<T, F, M2A>(
         self,
         code: T,
         msg_builder: F,
-    ) -> TestBuilder<VM, M1, M2A, M3, OW, TA>
+    ) -> TestBuilder<DB, VM, PP, ID, M1, M2A, M3, OW, TA>
     where
         T: Into<Binary>,
         F: FnOnce(BTreeMap<Addr, Coins>) -> M2A + 'static,
     {
         TestBuilder {
+            db: self.db,
             vm: self.vm,
+            pp: self.pp,
+            indexer: self.indexer,
             tracing_level: self.tracing_level,
             chain_id: self.chain_id,
             genesis_time: self.genesis_time,
             block_time: self.block_time,
             default_gas_limit: self.default_gas_limit,
-            app_configs: self.app_configs,
+            app_config: self.app_config,
             owner: self.owner,
             account_opt: self.account_opt,
             accounts: self.accounts,
@@ -245,6 +295,7 @@ where
             taxman_opt: self.taxman_opt,
             fee_denom: self.fee_denom,
             fee_rate: self.fee_rate,
+            max_orphan_age: self.max_orphan_age,
         }
     }
 
@@ -270,35 +321,35 @@ where
     ///
     /// let (suite, accounts) = TestBuilder::new()
     ///     .add_account("owner", Coins::new())
-    ///     .unwrap()
     ///     .set_owner("owner")
-    ///     .unwrap()
     ///     .set_taxman_code(
     ///         code,
     ///         |fee_denom, fee_rate| grug_mock_taxman::InstantiateMsg {
     ///             config: grug_mock_taxman::Config { fee_denom, fee_rate },
     ///         },
     ///     )
-    ///     .build()
-    ///     .unwrap();
+    ///     .build();
     /// ```
     pub fn set_taxman_code<T, F, M3A>(
         self,
         code: T,
         msg_builder: F,
-    ) -> TestBuilder<VM, M1, M2, M3A, OW, TA>
+    ) -> TestBuilder<DB, VM, PP, ID, M1, M2, M3A, OW, TA>
     where
         T: Into<Binary>,
         F: FnOnce(Denom, Udec128) -> M3A + 'static,
     {
         TestBuilder {
+            db: self.db,
             vm: self.vm,
+            pp: self.pp,
+            indexer: self.indexer,
             tracing_level: self.tracing_level,
             chain_id: self.chain_id,
             genesis_time: self.genesis_time,
             block_time: self.block_time,
             default_gas_limit: self.default_gas_limit,
-            app_configs: self.app_configs,
+            app_config: self.app_config,
             owner: self.owner,
             account_opt: self.account_opt,
             accounts: self.accounts,
@@ -310,6 +361,7 @@ where
             },
             fee_denom: self.fee_denom,
             fee_rate: self.fee_rate,
+            max_orphan_age: self.max_orphan_age,
         }
     }
 
@@ -317,13 +369,13 @@ where
         mut self,
         name: &'static str,
         balances: C,
-    ) -> anyhow::Result<TestBuilder<VM, M1, M2, M3, OW, Defined<TestAccounts>>>
+    ) -> TestBuilder<DB, VM, PP, ID, M1, M2, M3, OW, Defined<TestAccounts>>
     where
         C: TryInto<Coins>,
-        anyhow::Error: From<C::Error>,
+        C::Error: Debug,
     {
-        let mut accounts = self.accounts.maybe_inner().unwrap_or_default();
-        ensure!(
+        let mut accounts = self.accounts.maybe_into_inner().unwrap_or_default();
+        assert!(
             !accounts.contains_key(name),
             "account with name {name} already exists"
         );
@@ -332,20 +384,23 @@ where
         let account = TestAccount::new_random(self.account_opt.code.hash256(), name.as_bytes());
 
         // Save account and balances
-        let balances = balances.try_into()?;
+        let balances = balances.try_into().unwrap();
         if !balances.is_empty() {
             self.balances.insert(account.address, balances);
         }
         accounts.insert(name, account);
 
-        Ok(TestBuilder {
+        TestBuilder {
+            db: self.db,
             vm: self.vm,
+            pp: self.pp,
+            indexer: self.indexer,
             tracing_level: self.tracing_level,
             chain_id: self.chain_id,
             genesis_time: self.genesis_time,
             block_time: self.block_time,
             default_gas_limit: self.default_gas_limit,
-            app_configs: self.app_configs,
+            app_config: self.app_config,
             owner: self.owner,
             account_opt: self.account_opt,
             accounts: Defined::new(accounts),
@@ -354,16 +409,20 @@ where
             taxman_opt: self.taxman_opt,
             fee_denom: self.fee_denom,
             fee_rate: self.fee_rate,
-        })
+            max_orphan_age: self.max_orphan_age,
+        }
     }
 }
 
-impl<VM, M1, M2, M3, OW> TestBuilder<VM, M1, M2, M3, OW, Undefined<TestAccounts>>
+impl<DB, VM, PP, ID, M1, M2, M3, OW>
+    TestBuilder<DB, VM, PP, ID, M1, M2, M3, OW, Undefined<TestAccounts>>
 where
+    DB: Db,
+    ID: Indexer,
     M1: Serialize,
     M2: Serialize,
     M3: Serialize,
-    OW: MaybeDefined<Inner = Addr>,
+    OW: MaybeDefined<Addr>,
     VM: TestVm + Clone,
     AppError: From<VM::Error>,
 {
@@ -394,31 +453,30 @@ where
     ///         code,
     ///         |public_key| grug_mock_account::InstantiateMsg { public_key },
     ///     )
-    ///     .unwrap()
     ///     .add_account("owner", Coins::new())
-    ///     .unwrap()
     ///     .set_owner("owner")
-    ///     .unwrap()
-    ///     .build()
-    ///     .unwrap();
+    ///     .build();
     /// ```
     pub fn set_account_code<T, F, M1A>(
         self,
         code: T,
         msg_builder: F,
-    ) -> anyhow::Result<TestBuilder<VM, M1A, M2, M3, OW, Undefined<TestAccounts>>>
+    ) -> TestBuilder<DB, VM, PP, ID, M1A, M2, M3, OW, Undefined<TestAccounts>>
     where
         T: Into<Binary>,
         F: Fn(grug_mock_account::PublicKey) -> M1A + 'static,
     {
-        Ok(TestBuilder {
+        TestBuilder {
+            db: self.db,
             vm: self.vm,
+            pp: self.pp,
+            indexer: self.indexer,
             tracing_level: self.tracing_level,
             chain_id: self.chain_id,
             genesis_time: self.genesis_time,
             block_time: self.block_time,
             default_gas_limit: self.default_gas_limit,
-            app_configs: self.app_configs,
+            app_config: self.app_config,
             owner: self.owner,
             account_opt: CodeOption {
                 code: code.into(),
@@ -430,30 +488,35 @@ where
             taxman_opt: self.taxman_opt,
             fee_denom: self.fee_denom,
             fee_rate: self.fee_rate,
-        })
+            max_orphan_age: self.max_orphan_age,
+        }
     }
 }
 
 // `set_owner` can only be called if `add_accounts` has been called at least
 // once, and `set_owner` hasn't already been called.
-impl<VM, M1, M2, M3> TestBuilder<VM, M1, M2, M3, Undefined<Addr>, Defined<TestAccounts>> {
+impl<DB, VM, PP, ID, M1, M2, M3>
+    TestBuilder<DB, VM, PP, ID, M1, M2, M3, Undefined<Addr>, Defined<TestAccounts>>
+{
     pub fn set_owner(
         self,
         name: &'static str,
-    ) -> anyhow::Result<TestBuilder<VM, M1, M2, M3, Defined<Addr>, Defined<TestAccounts>>> {
-        let owner =
-            self.accounts.inner().get(name).ok_or_else(|| {
-                anyhow!("failed to set owner: can't find account with name `{name}`")
-            })?;
+    ) -> TestBuilder<DB, VM, PP, ID, M1, M2, M3, Defined<Addr>, Defined<TestAccounts>> {
+        let owner = self.accounts.inner().get(name).unwrap_or_else(|| {
+            panic!("failed to set owner: can't find account with name `{name}`")
+        });
 
-        Ok(TestBuilder {
+        TestBuilder {
+            db: self.db,
             vm: self.vm,
+            pp: self.pp,
+            indexer: self.indexer,
             tracing_level: self.tracing_level,
             chain_id: self.chain_id,
             genesis_time: self.genesis_time,
             block_time: self.block_time,
             default_gas_limit: self.default_gas_limit,
-            app_configs: self.app_configs,
+            app_config: self.app_config,
             owner: Defined::new(owner.address),
             account_opt: self.account_opt,
             accounts: self.accounts,
@@ -462,20 +525,25 @@ impl<VM, M1, M2, M3> TestBuilder<VM, M1, M2, M3, Undefined<Addr>, Defined<TestAc
             taxman_opt: self.taxman_opt,
             fee_denom: self.fee_denom,
             fee_rate: self.fee_rate,
-        })
+            max_orphan_age: self.max_orphan_age,
+        }
     }
 }
 
 // `build` can only be called if both `owner` and `accounts` have been set.
-impl<VM, M1, M2, M3> TestBuilder<VM, M1, M2, M3, Defined<Addr>, Defined<TestAccounts>>
+impl<DB, VM, PP, ID, M1, M2, M3>
+    TestBuilder<DB, VM, PP, ID, M1, M2, M3, Defined<Addr>, Defined<TestAccounts>>
 where
+    DB: Db,
     M1: Serialize,
     M2: Serialize,
     M3: Serialize,
-    VM: TestVm + Clone,
-    AppError: From<VM::Error>,
+    VM: TestVm + Clone + 'static,
+    PP: ProposalPreparer,
+    ID: Indexer,
+    AppError: From<VM::Error> + From<PP::Error> + From<ID::Error> + From<DB::Error>,
 {
-    pub fn build(self) -> anyhow::Result<(TestSuite<MemDb, VM>, TestAccounts)> {
+    pub fn build(self) -> (TestSuite<DB, VM, PP, ID>, TestAccounts) {
         if let Some(tracing_level) = self.tracing_level {
             setup_tracing_subscriber(tracing_level);
         }
@@ -497,10 +565,13 @@ where
             .unwrap_or_else(|| Udec128::from_str(DEFAULT_FEE_RATE).unwrap());
 
         // Use the current system time as genesis time, if unspecified.
-        let genesis_time = match self.genesis_time {
-            Some(time) => time,
-            None => Timestamp::from_nanos(SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()),
-        };
+        let genesis_time = self.genesis_time.unwrap_or_else(|| {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            Timestamp::from_nanos(nanos)
+        });
 
         let genesis_block = BlockInfo {
             hash: GENESIS_BLOCK_HASH,
@@ -521,7 +592,8 @@ where
                 Some(DEFAULT_BANK_SALT),
                 None,
                 Coins::new(),
-            )?,
+            )
+            .unwrap(),
             Message::instantiate(
                 self.taxman_opt.code.hash256(),
                 &(self.taxman_opt.msg_builder)(fee_denom, fee_rate),
@@ -529,19 +601,23 @@ where
                 Some(DEFAULT_TAXMAN_SALT),
                 None,
                 Coins::new(),
-            )?,
+            )
+            .unwrap(),
         ];
 
         // Instantiate accounts
-        for (name, account) in self.accounts.inner() {
-            msgs.push(Message::instantiate(
-                self.account_opt.code.hash256(),
-                &(self.account_opt.msg_builder)(account.pk),
-                *name,
-                Some(format!("account/{name}")),
-                Some(account.address),
-                Coins::new(),
-            )?);
+        for (name, account) in self.accounts.inner().deref() {
+            msgs.push(
+                Message::instantiate(
+                    self.account_opt.code.hash256(),
+                    &(self.account_opt.msg_builder)(account.pk),
+                    *name,
+                    Some(format!("account/{name}")),
+                    Some(account.address),
+                    Coins::new(),
+                )
+                .unwrap(),
+            );
         }
 
         // Predict bank contract address
@@ -568,23 +644,27 @@ where
                 upload: Permission::Everybody,
                 instantiate: Permission::Everybody,
             },
+            max_orphan_age: self.max_orphan_age.unwrap_or(DEFAULT_MAX_ORPHAN_AGE),
         };
 
         let genesis_state = GenesisState {
             config,
             msgs,
-            app_configs: self.app_configs,
+            app_config: self.app_config,
         };
 
-        let suite = TestSuite::new_with_vm(
+        let suite = TestSuite::new_with_db_vm_indexer_and_pp(
+            self.db,
             self.vm,
+            self.pp,
+            self.indexer,
             chain_id,
             block_time,
             default_gas_limit,
             genesis_block,
             genesis_state,
-        )?;
+        );
 
-        Ok((suite, self.accounts.into_inner()))
+        (suite, self.accounts.into_inner())
     }
 }

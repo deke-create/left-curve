@@ -1,12 +1,12 @@
 use {
     crate::{
-        handle_submessages, AppError, AppResult, GasTracker, Instance, QuerierProvider,
-        StorageProvider, Vm, CODES, CONTRACT_ADDRESS_KEY, CONTRACT_NAMESPACE,
+        catch_event, handle_submessages, AppError, AppResult, EventResult, GasTracker, Instance,
+        QuerierProviderImpl, StorageProvider, Vm, CODES, CONTRACT_NAMESPACE,
     },
     borsh::{BorshDeserialize, BorshSerialize},
     grug_types::{
-        Addr, BlockInfo, BorshDeExt, BorshSerExt, Context, Event, GenericResult, Hash256, Response,
-        Storage,
+        Addr, AuthResponse, BlockInfo, BorshDeExt, BorshSerExt, Context, EvtGuest, GenericResult,
+        Hash256, Response, Storage,
     },
 };
 
@@ -24,7 +24,7 @@ pub fn call_in_0_out_1<VM, R>(
 ) -> AppResult<R>
 where
     R: BorshDeserialize,
-    VM: Vm + Clone,
+    VM: Vm + Clone + 'static,
     AppError: From<VM::Error>,
 {
     // Create the VM instance
@@ -32,9 +32,9 @@ where
         vm,
         storage,
         gas_tracker,
+        ctx.block,
         query_depth,
         state_mutable,
-        ctx.block,
         ctx.contract,
         code_hash,
     )?;
@@ -62,7 +62,7 @@ pub fn call_in_1_out_1<VM, P, R>(
 where
     P: BorshSerialize,
     R: BorshDeserialize,
-    VM: Vm + Clone,
+    VM: Vm + Clone + 'static,
     AppError: From<VM::Error>,
 {
     // Create the VM instance
@@ -70,9 +70,9 @@ where
         vm,
         storage,
         gas_tracker,
+        ctx.block,
         query_depth,
         state_mutable,
-        ctx.block,
         ctx.contract,
         code_hash,
     )?;
@@ -105,7 +105,7 @@ where
     P1: BorshSerialize,
     P2: BorshSerialize,
     R: BorshDeserialize,
-    VM: Vm + Clone,
+    VM: Vm + Clone + 'static,
     AppError: From<VM::Error>,
 {
     // Create the VM instance
@@ -113,9 +113,9 @@ where
         vm,
         storage,
         gas_tracker,
+        ctx.block,
         query_depth,
         state_mutable,
-        ctx.block,
         ctx.contract,
         code_hash,
     )?;
@@ -144,24 +144,35 @@ pub fn call_in_0_out_1_handle_response<VM>(
     name: &'static str,
     code_hash: Hash256,
     ctx: &Context,
-) -> AppResult<Vec<Event>>
+) -> EventResult<EvtGuest>
 where
-    VM: Vm + Clone,
+    VM: Vm + Clone + 'static,
     AppError: From<VM::Error>,
 {
-    let response = call_in_0_out_1::<_, GenericResult<Response>>(
-        vm.clone(),
-        storage.clone(),
-        gas_tracker.clone(),
-        query_depth,
-        state_mutable,
-        name,
-        code_hash,
-        ctx,
-    )?
-    .into_std_result()?;
+    let evt = EvtGuest::base(ctx.contract, name);
 
-    handle_response(vm, storage, gas_tracker, msg_depth, name, ctx, response)
+    let response = catch_event! {
+        {
+            call_in_0_out_1::<_, GenericResult<Response>>(
+                vm.clone(),
+            storage.clone(),
+            gas_tracker.clone(),
+                query_depth,
+                state_mutable,
+                name,
+                code_hash,
+                ctx,
+            )?
+            .map_err(|msg| AppError::Guest {
+                address: ctx.contract,
+                name,
+                msg,
+            })
+        },
+        evt
+    };
+
+    handle_response(vm, storage, gas_tracker, msg_depth, ctx, response, evt)
 }
 
 /// Create a VM instance, call a function that takes exactly one parameter and
@@ -178,26 +189,92 @@ pub fn call_in_1_out_1_handle_response<VM, P>(
     code_hash: Hash256,
     ctx: &Context,
     param: &P,
-) -> AppResult<Vec<Event>>
+) -> EventResult<EvtGuest>
 where
     P: BorshSerialize,
-    VM: Vm + Clone,
+    VM: Vm + Clone + 'static,
     AppError: From<VM::Error>,
 {
-    let response = call_in_1_out_1::<_, _, GenericResult<Response>>(
-        vm.clone(),
-        storage.clone(),
-        gas_tracker.clone(),
-        query_depth,
-        state_mutable,
-        name,
-        code_hash,
-        ctx,
-        param,
-    )?
-    .into_std_result()?;
+    let evt = EvtGuest::base(ctx.contract, name);
 
-    handle_response(vm, storage, gas_tracker, msg_depth, name, ctx, response)
+    let response = catch_event! {
+        {
+            call_in_1_out_1::<_, _, GenericResult<Response>>(
+                vm.clone(),
+                storage.clone(),
+                gas_tracker.clone(),
+                query_depth,
+                state_mutable,
+                name,
+                code_hash,
+                ctx,
+                param,
+            )?
+            .map_err(|msg| AppError::Guest {
+                address: ctx.contract,
+                name,
+                msg,
+            })
+        },
+        evt
+    };
+
+    handle_response(vm, storage, gas_tracker, msg_depth, ctx, response, evt)
+}
+
+pub fn call_in_1_out_1_handle_auth_response<VM, P>(
+    vm: VM,
+    storage: Box<dyn Storage>,
+    gas_tracker: GasTracker,
+    msg_depth: usize,
+    query_depth: usize,
+    state_mutable: bool,
+    name: &'static str,
+    code_hash: Hash256,
+    ctx: &Context,
+    param: &P,
+    backrun: &mut bool,
+) -> EventResult<EvtGuest>
+where
+    P: BorshSerialize,
+    VM: Vm + Clone + 'static,
+    AppError: From<VM::Error>,
+{
+    let evt = EvtGuest::base(ctx.contract, name);
+
+    let auth_response = catch_event! {
+        {
+            call_in_1_out_1::<_, _, GenericResult<AuthResponse>>(
+                vm.clone(),
+                storage.clone(),
+                gas_tracker.clone(),
+                query_depth,
+                state_mutable,
+                name,
+                code_hash,
+                ctx,
+                param,
+            )?
+            .map_err(|msg| AppError::Guest {
+                address: ctx.contract,
+                name,
+                msg,
+            })
+        },
+        evt
+    };
+
+    *backrun = auth_response.request_backrun;
+
+    handle_response(
+        vm,
+        storage,
+        gas_tracker,
+        msg_depth,
+        ctx,
+        auth_response.response,
+        evt,
+    )
 }
 
 /// Create a VM instance, call a function that takes exactly two parameter and
@@ -215,53 +292,69 @@ pub fn call_in_2_out_1_handle_response<VM, P1, P2>(
     ctx: &Context,
     param1: &P1,
     param2: &P2,
-) -> AppResult<Vec<Event>>
+) -> EventResult<EvtGuest>
 where
     P1: BorshSerialize,
     P2: BorshSerialize,
-    VM: Vm + Clone,
+    VM: Vm + Clone + 'static,
     AppError: From<VM::Error>,
 {
-    let response = call_in_2_out_1::<_, _, _, GenericResult<Response>>(
-        vm.clone(),
-        storage.clone(),
-        gas_tracker.clone(),
-        query_depth,
-        state_mutable,
-        name,
-        code_hash,
-        ctx,
-        param1,
-        param2,
-    )?
-    .into_std_result()?;
+    let evt = EvtGuest::base(ctx.contract, name);
 
-    handle_response(vm, storage, gas_tracker, msg_depth, name, ctx, response)
+    let response = catch_event! {
+        {
+            call_in_2_out_1::<_, _, _, GenericResult<Response>>(
+                vm.clone(),
+                storage.clone(),
+                gas_tracker.clone(),
+                query_depth,
+                state_mutable,
+                name,
+                code_hash,
+                ctx,
+                param1,
+                param2
+            )?
+            .map_err(|msg| AppError::Guest {
+                address: ctx.contract,
+                name,
+                msg,
+            })
+        },
+        evt
+    };
+
+    handle_response(vm, storage, gas_tracker, msg_depth, ctx, response, evt)
 }
 
 fn create_vm_instance<VM>(
     mut vm: VM,
     storage: Box<dyn Storage>,
     gas_tracker: GasTracker,
+    block: BlockInfo,
     query_depth: usize,
     state_mutable: bool,
-    block: BlockInfo,
     contract: Addr,
     code_hash: Hash256,
 ) -> AppResult<VM::Instance>
 where
-    VM: Vm + Clone,
+    VM: Vm + Clone + 'static,
     AppError: From<VM::Error>,
 {
     // Load the program code from storage and deserialize
     let code = CODES.load(&storage, code_hash)?;
 
     // Create the providers
-    let querier = QuerierProvider::new(vm.clone(), storage.clone(), gas_tracker.clone(), block);
+    let querier = Box::new(QuerierProviderImpl::new(
+        vm.clone(),
+        storage.clone(),
+        gas_tracker.clone(),
+        block,
+    ));
     let storage = StorageProvider::new(storage, &[CONTRACT_NAMESPACE, &contract]);
 
     Ok(vm.build_instance(
-        &code,
+        &code.code,
         code_hash,
         storage,
         state_mutable,
@@ -271,35 +364,33 @@ where
     )?)
 }
 
-pub(crate) fn handle_response<VM>(
+fn handle_response<VM>(
     vm: VM,
     storage: Box<dyn Storage>,
     gas_tracker: GasTracker,
     msg_depth: usize,
-    name: &'static str,
     ctx: &Context,
     response: Response,
-) -> AppResult<Vec<Event>>
+    mut evt: EvtGuest,
+) -> EventResult<EvtGuest>
 where
-    VM: Vm + Clone,
+    VM: Vm + Clone + 'static,
     AppError: From<VM::Error>,
 {
-    // Create an event for this call
-    let event = Event::new(name)
-        .add_attribute(CONTRACT_ADDRESS_KEY, ctx.contract)
-        .add_attributes(response.attributes);
+    evt.contract_events = response.subevents;
 
     // Handle submessages; append events emitted during submessage handling
-    let mut events = vec![event];
-    events.extend(handle_submessages(
+    handle_submessages(
         vm,
         storage,
-        ctx.block,
         gas_tracker,
+        ctx.block,
         msg_depth,
         ctx.contract,
         response.submsgs,
-    )?);
-
-    Ok(events)
+    )
+    .map_merge(evt, |subevents, mut evt| {
+        evt.sub_events = subevents;
+        evt
+    })
 }

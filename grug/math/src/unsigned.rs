@@ -82,7 +82,7 @@ impl_chekced_into_signed_dec! {
     Udec256 => Dec256,
 }
 
-// ------------------------------------ tests ------------------------------------
+// ----------------------------------- tests -----------------------------------
 
 #[cfg(test)]
 mod int_tests {
@@ -159,7 +159,7 @@ mod dec_tests {
                 ]
             }
         }
-        method = |_0d: Dec<_>, passing, failing| {
+        method = |_0d: Dec<_, 18>, passing, failing| {
             for (unsigned, expected) in passing {
                 dt(_0d, unsigned);
                 assert_eq!(unsigned.checked_into_signed().unwrap(), expected);

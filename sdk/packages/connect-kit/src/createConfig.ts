@@ -1,3 +1,14 @@
+import { createEmitter } from "./createEmitter.js";
+import { createStorage } from "./storages/createStorage.js";
+
+import { createBaseClient } from "@left-curve/sdk";
+import { ConnectionStatus } from "@left-curve/types";
+import { uid } from "@left-curve/utils";
+import { persist, subscribeWithSelector } from "zustand/middleware";
+import { createStore } from "zustand/vanilla";
+
+import pkgJson from "../package.json" with { type: "json" };
+
 import type {
   AnyCoin,
   Chain,
@@ -7,31 +18,30 @@ import type {
   ConnectorEventMap,
   CreateConfigParameters,
   CreateConnectorFn,
+  EIP6963ProviderDetail,
   EventData,
   State,
   StoreApi,
   Transport,
-} from "@leftcurve/types";
-
-import { createEmitter } from "./createEmitter";
-import { createStorage } from "./storages/createStorage";
-
-import { createBaseClient } from "@leftcurve/sdk";
-import { uid } from "@leftcurve/utils";
-import { persist, subscribeWithSelector } from "zustand/middleware";
-import { createStore } from "zustand/vanilla";
-import { version } from "../package.json";
+} from "@left-curve/types";
+import { eip6963 } from "./connectors/eip6963.js";
+import { createMipdStore } from "./mipd.js";
 
 export function createConfig<
-  const chains extends readonly [Chain, ...Chain[]],
-  transports extends Record<chains[number]["id"], Transport>,
+  const chains extends readonly [Chain, ...Chain[]] = readonly [Chain, ...Chain[]],
+  transports extends Record<chains[number]["id"], Transport> = Record<
+    chains[number]["id"],
+    Transport
+  >,
   coin extends AnyCoin = AnyCoin,
 >(parameters: CreateConfigParameters<chains, transports, coin>): Config<chains, transports, coin> {
   const {
+    multiInjectedProviderDiscovery = true,
     storage = createStorage({
       storage:
         typeof window !== "undefined" && window.localStorage ? window.localStorage : undefined,
     }),
+    ssr,
     ...rest
   } = parameters;
 
@@ -39,9 +49,28 @@ export function createConfig<
   // Set up connectors, clients, etc.
   //////////////////////////////////////////////////////////////////////////////
 
+  const mipd =
+    typeof window !== "undefined" && multiInjectedProviderDiscovery ? createMipdStore() : undefined;
+
   const chains = createStore(() => rest.chains);
   const coins = createStore(() => rest.coins);
-  const connectors = createStore(() => [...(rest.connectors ?? [])].map(setup));
+  const connectors = createStore(() => {
+    const collection = [];
+    const rdnsSet = new Set<string>();
+    for (const connectorFn of rest.connectors ?? []) {
+      const connector = setup(connectorFn);
+      collection.push(connector);
+      if (!ssr && connector.rdns) rdnsSet.add(connector.rdns);
+    }
+    if (!ssr && mipd) {
+      const providers = mipd.getProviders();
+      for (const provider of providers) {
+        if (rdnsSet.has(provider.info.rdns)) continue;
+        collection.push(setup(eip6963(provider as EIP6963ProviderDetail)));
+      }
+    }
+    return collection;
+  });
 
   function setup(connectorFn: CreateConnectorFn): Connector {
     // Set up emitter with uid and add to connector so they are "linked" together.
@@ -120,14 +149,15 @@ export function createConfig<
 
   function getInitialState(): State {
     return {
+      isMipdLoaded: !multiInjectedProviderDiscovery,
       chainId: chains.getState()[0].id,
       connections: new Map(),
       connectors: new Map(),
-      status: "disconnected",
+      status: ConnectionStatus.Disconnected,
     };
   }
 
-  const currentVersion = Number.parseInt(version);
+  const currentVersion = Number.parseInt(pkgJson.version);
   const stateCreator = storage
     ? persist(getInitialState, {
         name: "store",
@@ -175,6 +205,32 @@ export function createConfig<
     : getInitialState;
 
   const store = createStore(subscribeWithSelector(stateCreator));
+
+  if (multiInjectedProviderDiscovery) {
+    const timeout = setTimeout(() => store.setState((x) => ({ ...x, isMipdLoaded: true })), 500);
+    // EIP-6963 subscribe for new wallet providers
+    mipd?.subscribe((providerDetails) => {
+      clearTimeout(timeout);
+      const connectorIdSet = new Set();
+      const connectorRdnsSet = new Set();
+      for (const connector of connectors.getState()) {
+        connectorIdSet.add(connector.id);
+        if (connector.rdns) connectorRdnsSet.add(connector.rdns);
+      }
+
+      const newConnectors: Connector[] = [];
+      for (const providerDetail of providerDetails) {
+        if (connectorRdnsSet.has(providerDetail.info.rdns)) continue;
+        const connector = setup(eip6963(providerDetail as EIP6963ProviderDetail));
+        if (connectorIdSet.has(connector.id)) continue;
+        newConnectors.push(connector);
+      }
+
+      if (storage && !store.persist.hasHydrated()) return;
+      connectors.setState((x) => [...x, ...newConnectors], true);
+      store.setState((x) => ({ ...x, isMipdLoaded: true }));
+    });
+  }
 
   //////////////////////////////////////////////////////////////////////////////
   // Emitter listeners
@@ -226,7 +282,7 @@ export function createConfig<
         }),
         chainId: data.chainId,
         connectors: new Map(x.connectors).set(data.chainId, data.uid),
-        status: "connected",
+        status: ConnectionStatus.Connected,
       };
     });
   }
@@ -257,7 +313,7 @@ export function createConfig<
           ...x,
           connections: new Map(),
           chainIdToConnection: new Map(),
-          status: "disconnected",
+          status: ConnectionStatus.Disconnected,
         };
       }
 
@@ -269,12 +325,8 @@ export function createConfig<
   }
 
   return {
-    ssr: rest.ssr ?? false,
     get coins() {
       return coins.getState() ?? {};
-    },
-    get store() {
-      return store as StoreApi;
     },
     get chains() {
       return chains.getState();
@@ -311,6 +363,27 @@ export function createConfig<
             }
           : undefined,
       );
+    },
+    _internal: {
+      ssr: ssr ?? false,
+      get mipd() {
+        return mipd;
+      },
+      get store() {
+        return store as StoreApi;
+      },
+      connectors: {
+        setup,
+        setState(value) {
+          return connectors.setState(
+            typeof value === "function" ? value(connectors.getState()) : value,
+            true,
+          );
+        },
+        subscribe(listener) {
+          return connectors.subscribe(listener);
+        },
+      },
     },
   };
 }

@@ -1,26 +1,26 @@
 export {
   getNavigatorOS,
   getRootDomain,
-} from "./browser";
+} from "./browser.js";
 
 export {
   camelToSnake,
   snakeToCamel,
   capitalize,
-} from "./strings";
+  truncateAddress,
+} from "./strings.js";
 
 export {
   recursiveTransform,
   mayTransform,
-} from "./mappers";
+} from "./mappers.js";
 
 export {
   getCoinsTypedData,
   getMembersTypedData,
   composeTypedData,
-  composeAndHashTypedData,
   hashTypedData,
-} from "./typedData";
+} from "./typedData.js";
 
 export {
   assertBoolean,
@@ -31,15 +31,25 @@ export {
   assertNotEmpty,
   assertObject,
   assertSet,
-} from "./asserts";
+} from "./asserts.js";
 
 export {
   type CurrencyFormatterOptions,
   formatCurrency,
   type NumberFormatterOptions,
   formatNumber,
-  formatAddress,
-} from "./formatters";
+  formatUnits,
+  parseUnits,
+} from "./formatters.js";
 
-export { uid } from "./uid";
-export { sleep } from "./promises";
+export {
+  wait,
+  withRetry,
+  withTimeout,
+} from "./promises.js";
+
+export { createBatchScheduler } from "./scheduler.js";
+
+export { debounce } from "./frequency.js";
+
+export { uid } from "./uid.js";

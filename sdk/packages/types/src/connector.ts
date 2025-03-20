@@ -1,19 +1,20 @@
-import type { Account, Username } from "./account";
-import type { Chain, ChainId } from "./chain";
-import type { Client } from "./client";
-import type { Emitter } from "./emitter";
-import type { KeyHash } from "./key";
-import type { SignDoc, SignedDoc } from "./signature";
-import type { Signer } from "./signer";
-import type { Transport } from "./transports";
+import type { Account, Username } from "./account.js";
+import type { Chain, ChainId } from "./chain.js";
+import type { Client } from "./client.js";
+import type { Emitter } from "./emitter.js";
+import type { KeyHash } from "./key.js";
+import type { SignDoc, SignedDoc } from "./signature.js";
+import type { Signer } from "./signer.js";
+import type { Transport } from "./transports.js";
 
 export type ConnectorUId = string;
 
-export type ConnectorId = (typeof ConnectorIdType)[keyof typeof ConnectorIdType];
+export type ConnectorId = (typeof ConnectorIds)[keyof typeof ConnectorIds] | (string & {});
 
-export const ConnectorIdType = {
+export const ConnectorIds = {
   Metamask: "metamask",
-  Keplr: "keplr",
+  Phantom: "phantom",
+  Backpack: "backpack",
   Passkey: "passkey",
 } as const;
 
@@ -62,15 +63,6 @@ export type ConnectorEventMap = {
   };
 };
 
-export const ConnectorStatus = {
-  Connected: "connected",
-  Connecting: "connecting",
-  Reconnecting: "reconnecting",
-  Disconnected: "disconnected",
-} as const;
-
-export type ConnectorStatusType = (typeof ConnectorStatus)[keyof typeof ConnectorStatus];
-
 export type CreateConnectorFn<
   provider extends Record<string, unknown> | undefined = Record<string, unknown> | undefined,
   chain extends Chain = Chain,
@@ -84,9 +76,10 @@ export type CreateConnectorFn<
   transports: Record<string, Transport>;
 }) => properties & {
   readonly id: ConnectorId;
-  readonly icon?: string | undefined;
   readonly name: string;
   readonly type: ConnectorType;
+  readonly icon?: string;
+  readonly rdns?: string;
   setup?(): Promise<void>;
   connect(parameters: {
     username: string;

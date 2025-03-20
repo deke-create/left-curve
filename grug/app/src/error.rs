@@ -14,7 +14,20 @@ pub enum AppError {
     #[error("DB error: {0}")]
     Db(String),
 
-    #[error("Merkle proof is not supported for `/app` query; use `/store` instead")]
+    #[error("proposal preparer error: {0}")]
+    PrepareProposal(String),
+
+    #[error("indexer error: {0}")]
+    Indexer(String),
+
+    #[error("contract returned error! address: {address}, method: {name}, msg: {msg}")]
+    Guest {
+        address: Addr,
+        name: &'static str,
+        msg: String,
+    },
+
+    #[error("merkle proof is not supported for `/app` query; use `/store` instead")]
     ProofNotSupported,
 
     #[error("simulating a transaction at past block height is not supported")]

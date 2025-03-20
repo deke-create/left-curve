@@ -1,45 +1,41 @@
 {
-  "name": "@leftcurve/connect-kit",
+  "name": "@left-curve/connect-kit",
   "version": "0.1.0",
+  "type": "module",
   "scripts": {
+    "bump": "npm version --no-git-tag-version",
     "ci": "pnpm lint",
-    "clean": "rm -rf ./build && rm -rf node_modules",
+    "clean": "rm -rf ./build && rm -rf node_modules && rm -rf tsconfig.tsbuildinfo",
     "clean:build": "rm -rf ./build",
     "lint": "pnpm biome check --write src",
     "lint:fix": "pnpm biome ci ./src",
     "test": "pnpm vitest run",
     "test:watch": "pnpm vitest",
-    "pre-dev": "pnpm build",
-    "dev": "pnpm tsup --watch --onSuccess 'tsup --dts-only --silent' --silent",
+    "pre-dev": "tsc",
+    "dev": "tsc -w",
     "build": "pnpm tsup --clean"
   },
-  "main": "./build/index.js",
-  "module": "./build/index.mjs",
+  "main": "./build/index.cjs",
+  "module": "./build/index.js",
   "types": "./build/index.d.ts",
   "typings": "./build/index.d.ts",
   "sideEffects": false,
-  "files": [
-    "build",
-    "src",
-    "!**/*.spec.ts",
-    "!typedoc.json",
-    "!tsup.config.ts"
-  ],
+  "files": ["build"],
   "exports": {
     ".": {
       "types": "./build/index.d.ts",
-      "import": "./build/index.mjs",
-      "default": "./build/index.js"
+      "import": "./build/index.js",
+      "default": "./build/index.cjs"
     },
     "./chains": {
       "types": "./build/chains.d.ts",
-      "import": "./build/chains.mjs",
-      "default": "./build/chains.js"
+      "import": "./build/chains.js",
+      "default": "./build/chains.cjs"
     },
     "./handlers": {
       "types": "./build/handlers/index.d.ts",
-      "import": "./build/handlers/index.mjs",
-      "default": "./build/handlers/index.js"
+      "import": "./build/handlers/index.js",
+      "default": "./build/handlers/index.cjs"
     }
   },
   "typesVersions": {
@@ -53,18 +49,18 @@
     }
   },
   "devDependencies": {
-    "@leftcurve/config": "workspace:^",
+    "@left-curve/config": "workspace:^",
     "@tanstack/query-core": "^5.56.2",
-    "vitest": "^2.0.5"
+    "vitest": "catalog:"
   },
   "dependencies": {
-    "@leftcurve/crypto": "workspace:^",
-    "@leftcurve/encoding": "workspace:^",
-    "@leftcurve/sdk": "workspace:^",
-    "@leftcurve/types": "workspace:^",
-    "@leftcurve/utils": "workspace:^",
+    "@left-curve/crypto": "workspace:^",
+    "@left-curve/encoding": "workspace:^",
+    "@left-curve/sdk": "workspace:^",
+    "@left-curve/types": "workspace:^",
+    "@left-curve/utils": "workspace:^",
     "eventemitter3": "^5.0.1",
-    "zustand": "^4.5.5"
+    "zustand": "catalog:"
   },
   "peerDependencies": {
     "@tanstack/query-core": ">=5.0.0"
@@ -73,5 +69,9 @@
     "@tanstack/query-core": {
       "optional": true
     }
-  }
+  },
+  "license": "TBD",
+  "homepage": "https://grug.build",
+  "repository": "left-curve/left-curve",
+  "keywords": ["grug", "smart-contracts", "blockchain", "cryptocurrency", "web3", "typescript"]
 }

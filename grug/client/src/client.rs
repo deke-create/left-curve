@@ -1,19 +1,19 @@
 use {
-    crate::{AdminOption, GasOption, SigningOption},
+    crate::{AdminOption, GasOption},
     anyhow::{bail, ensure},
     grug_jmt::Proof,
     grug_math::Inner,
     grug_types::{
-        Addr, AsyncSigner, Binary, Coin, Coins, Config, ConfigUpdates, ContractInfo, Denom,
-        GenericResult, Hash256, HashExt, Json, JsonDeExt, JsonSerExt, Message, Op, Query,
-        QueryResponse, StdError, Tx, TxOutcome, UnsignedTx,
+        Addr, Binary, Code, Coin, Coins, Config, ContractInfo, Denom, GenericResult, Hash256,
+        HashExt, JsonDeExt, JsonSerExt, Message, NonEmpty, Query, QueryResponse, Signer, StdError,
+        Tx, TxOutcome, UnsignedTx,
     },
     serde::{de::DeserializeOwned, ser::Serialize},
-    std::{any::type_name, collections::BTreeMap},
+    std::{any::type_name, collections::BTreeMap, ops::Deref},
     tendermint::{block::Height, Hash as TmHash},
     tendermint_rpc::{
         endpoint::{abci_query::AbciQuery, block, block_results, broadcast::tx_sync, status, tx},
-        Client as TmClient, HttpClient,
+        Client as TmClient, HttpClient, HttpClientUrl,
     },
 };
 
@@ -25,14 +25,16 @@ pub struct Client {
 }
 
 impl Client {
-    /// Creating a new [`Client`](crate::Client) by connecting to a Tendermint
+    /// Creating a new [`QueryClient`](crate::QueryClient) by connecting to a Tendermint
     /// RPC endpoint.
-    pub fn connect(endpoint: &str) -> anyhow::Result<Self> {
-        let inner = HttpClient::new(endpoint)?;
-        Ok(Self { inner })
+    pub fn connect<U>(endpoint: U) -> anyhow::Result<Self>
+    where
+        U: TryInto<HttpClientUrl, Error = tendermint_rpc::Error>,
+    {
+        Ok(Self {
+            inner: HttpClient::new(endpoint)?,
+        })
     }
-
-    // -------------------------- tendermint methods ---------------------------
 
     /// Query the Tendermint node, sync, and validator status.
     pub async fn query_status(&self) -> anyhow::Result<status::Response> {
@@ -73,8 +75,6 @@ impl Client {
         }
     }
 
-    // ----------------------------- query methods -----------------------------
-
     /// Query the Grug app through the ABCI `Query` method.
     ///
     /// Used internally. Use `query_store` or `query_app` instead.
@@ -90,6 +90,7 @@ impl Client {
             .inner
             .abci_query(Some(path.into()), data, height, prove)
             .await?;
+
         if res.code.is_err() {
             bail!(
                 "query failed! codespace = {}, code = {}, log = {}",
@@ -98,6 +99,7 @@ impl Client {
                 res.log
             );
         }
+
         Ok(res)
     }
 
@@ -172,7 +174,7 @@ impl Client {
 
     /// Query the chain-level configuration.
     pub async fn query_config(&self, height: Option<u64>) -> anyhow::Result<Config> {
-        self.query_app(&Query::Config {}, height)
+        self.query_app(&Query::config(), height)
             .await
             .map(|res| res.as_config())
     }
@@ -184,7 +186,7 @@ impl Client {
         denom: Denom,
         height: Option<u64>,
     ) -> anyhow::Result<Coin> {
-        self.query_app(&Query::Balance { address, denom }, height)
+        self.query_app(&Query::balance(address, denom), height)
             .await
             .map(|res| res.as_balance())
     }
@@ -197,21 +199,14 @@ impl Client {
         limit: Option<u32>,
         height: Option<u64>,
     ) -> anyhow::Result<Coins> {
-        self.query_app(
-            &Query::Balances {
-                address,
-                start_after,
-                limit,
-            },
-            height,
-        )
-        .await
-        .map(|res| res.as_balances())
+        self.query_app(&Query::balances(address, start_after, limit), height)
+            .await
+            .map(|res| res.as_balances())
     }
 
     /// Query a token's total supply.
     pub async fn query_supply(&self, denom: Denom, height: Option<u64>) -> anyhow::Result<Coin> {
-        self.query_app(&Query::Supply { denom }, height)
+        self.query_app(&Query::supply(denom), height)
             .await
             .map(|res| res.as_supply())
     }
@@ -223,14 +218,14 @@ impl Client {
         limit: Option<u32>,
         height: Option<u64>,
     ) -> anyhow::Result<Coins> {
-        self.query_app(&Query::Supplies { start_after, limit }, height)
+        self.query_app(&Query::supplies(start_after, limit), height)
             .await
             .map(|res| res.as_supplies())
     }
 
     /// Query a single Wasm byte code by hash.
-    pub async fn query_code(&self, hash: Hash256, height: Option<u64>) -> anyhow::Result<Binary> {
-        self.query_app(&Query::Code { hash }, height)
+    pub async fn query_code(&self, hash: Hash256, height: Option<u64>) -> anyhow::Result<Code> {
+        self.query_app(&Query::code(hash), height)
             .await
             .map(|res| res.as_code())
     }
@@ -241,8 +236,8 @@ impl Client {
         start_after: Option<Hash256>,
         limit: Option<u32>,
         height: Option<u64>,
-    ) -> anyhow::Result<BTreeMap<Hash256, Binary>> {
-        self.query_app(&Query::Codes { start_after, limit }, height)
+    ) -> anyhow::Result<BTreeMap<Hash256, Code>> {
+        self.query_app(&Query::codes(start_after, limit), height)
             .await
             .map(|res| res.as_codes())
     }
@@ -253,7 +248,7 @@ impl Client {
         address: Addr,
         height: Option<u64>,
     ) -> anyhow::Result<ContractInfo> {
-        self.query_app(&Query::Contract { address }, height)
+        self.query_app(&Query::contract(address), height)
             .await
             .map(|res| res.as_contract())
     }
@@ -265,7 +260,7 @@ impl Client {
         limit: Option<u32>,
         height: Option<u64>,
     ) -> anyhow::Result<BTreeMap<Addr, ContractInfo>> {
-        self.query_app(&Query::Contracts { start_after, limit }, height)
+        self.query_app(&Query::contracts(start_after, limit), height)
             .await
             .map(|res| res.as_contracts())
     }
@@ -280,15 +275,9 @@ impl Client {
     where
         B: Into<Binary>,
     {
-        self.query_app(
-            &Query::WasmRaw {
-                contract,
-                key: key.into(),
-            },
-            height,
-        )
-        .await
-        .map(|res| res.as_wasm_raw())
+        self.query_app(&Query::wasm_raw(contract, key), height)
+            .await
+            .map(|res| res.as_wasm_raw())
     }
 
     /// Call the contract's query entry point with the given message.
@@ -302,17 +291,11 @@ impl Client {
         M: Serialize,
         R: DeserializeOwned,
     {
-        self.query_app(
-            &Query::WasmSmart {
-                contract,
-                msg: msg.to_json_value()?,
-            },
-            height,
-        )
-        .await?
-        .as_wasm_smart()
-        .deserialize_json()
-        .map_err(Into::into)
+        self.query_app(&Query::wasm_smart(contract, msg)?, height)
+            .await?
+            .as_wasm_smart()
+            .deserialize_json()
+            .map_err(Into::into)
     }
 
     /// Simulate the gas usage of a transaction.
@@ -323,8 +306,6 @@ impl Client {
             .deserialize_json()
             .map_err(Into::into)
     }
-
-    // -------------------------- transaction methods --------------------------
 
     /// Broadcast an already signed transaction, without terminal prompt for
     /// confirmation.
@@ -348,55 +329,83 @@ impl Client {
             Ok(None)
         }
     }
+}
+
+/// A client for interacting with a Grug chain via Tendermint RPC, with the
+/// additional capability of signing transactions.
+pub struct SigningClient {
+    inner: Client,
+    chain_id: String,
+}
+
+impl Deref for SigningClient {
+    type Target = Client;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl SigningClient {
+    /// Creating a new [`Client`](crate::Client) by connecting to a Tendermint
+    /// RPC endpoint.
+    pub fn connect<T, U>(chain_id: T, endpoint: U) -> anyhow::Result<Self>
+    where
+        T: Into<String>,
+        U: TryInto<HttpClientUrl, Error = tendermint_rpc::Error>,
+    {
+        Ok(Self {
+            inner: Client::connect(endpoint)?,
+            chain_id: chain_id.into(),
+        })
+    }
 
     /// Create, sign, and broadcast a transaction with a single message, without
     /// terminal prompt for confirmation.
     ///
     /// If you need the prompt confirmation, use `send_message_with_confirmation`.
-    pub async fn send_message<S>(
+    pub async fn send_message(
         &self,
+        signer: &mut dyn Signer,
         msg: Message,
         gas_opt: GasOption,
-        sign_opt: SigningOption<'_, S>,
-    ) -> anyhow::Result<tx_sync::Response>
-    where
-        S: AsyncSigner,
-    {
-        self.send_messages(vec![msg], gas_opt, sign_opt).await
+    ) -> anyhow::Result<tx_sync::Response> {
+        self.send_messages(signer, NonEmpty::new_unchecked(vec![msg]), gas_opt)
+            .await
     }
 
     /// Create, sign, and broadcast a transaction with a single message, with
     /// terminal prompt for confirmation.
     ///
     /// Returns `None` if the prompt is denied.
-    pub async fn send_message_with_confirmation<S>(
+    pub async fn send_message_with_confirmation(
         &self,
+        signer: &mut dyn Signer,
         msg: Message,
         gas_opt: GasOption,
-        sign_opt: SigningOption<'_, S>,
+
         confirm_fn: fn(&Tx) -> anyhow::Result<bool>,
-    ) -> anyhow::Result<Option<tx_sync::Response>>
-    where
-        S: AsyncSigner,
-    {
-        self.send_messages_with_confirmation(vec![msg], gas_opt, sign_opt, confirm_fn)
-            .await
+    ) -> anyhow::Result<Option<tx_sync::Response>> {
+        self.send_messages_with_confirmation(
+            signer,
+            NonEmpty::new_unchecked(vec![msg]),
+            gas_opt,
+            confirm_fn,
+        )
+        .await
     }
 
     /// Create, sign, and broadcast a transaction with the given messages,
     /// without terminal prompt for confirmation.
     ///
     /// If you need the prompt confirmation, use `send_messages_with_confirmation`.
-    pub async fn send_messages<S>(
+    pub async fn send_messages(
         &self,
-        msgs: Vec<Message>,
+        signer: &mut dyn Signer,
+        msgs: NonEmpty<Vec<Message>>,
         gas_opt: GasOption,
-        sign_opt: SigningOption<'_, S>,
-    ) -> anyhow::Result<tx_sync::Response>
-    where
-        S: AsyncSigner,
-    {
-        self.send_messages_with_confirmation(msgs, gas_opt, sign_opt, no_confirmation)
+    ) -> anyhow::Result<tx_sync::Response> {
+        self.send_messages_with_confirmation(signer, msgs, gas_opt, no_confirmation)
             .await
             .map(Option::unwrap)
     }
@@ -405,28 +414,21 @@ impl Client {
     /// terminal prompt for confirmation.
     ///
     /// Returns `None` if the prompt is denied.
-    pub async fn send_messages_with_confirmation<S>(
+    pub async fn send_messages_with_confirmation(
         &self,
-        msgs: Vec<Message>,
+        signer: &mut dyn Signer,
+        msgs: NonEmpty<Vec<Message>>,
         gas_opt: GasOption,
-        sign_opt: SigningOption<'_, S>,
+
         confirm_fn: fn(&Tx) -> anyhow::Result<bool>,
-    ) -> anyhow::Result<Option<tx_sync::Response>>
-    where
-        S: AsyncSigner,
-    {
+    ) -> anyhow::Result<Option<tx_sync::Response>> {
         // If gas limit is not provided, simulate
         let gas_limit = match gas_opt {
             GasOption::Simulate {
                 flat_increase,
                 scale,
             } => {
-                let unsigned_tx = UnsignedTx {
-                    sender: sign_opt.sender,
-                    msgs: msgs.clone(),
-                    // TODO: allow user to specify this
-                    data: Json::Null,
-                };
+                let unsigned_tx = signer.unsigned_transaction(msgs.clone(), &self.chain_id)?;
                 match self.simulate(&unsigned_tx).await? {
                     TxOutcome {
                         result: GenericResult::Ok(_),
@@ -442,89 +444,83 @@ impl Client {
             GasOption::Predefined { gas_limit } => gas_limit,
         };
 
-        let tx = sign_opt
-            .signing_key
-            .sign_transaction(msgs, &sign_opt.chain_id, gas_limit)
-            .await?;
+        let tx = signer.sign_transaction(msgs, &self.chain_id, gas_limit)?;
 
         self.broadcast_tx_with_confirmation(tx, confirm_fn).await
     }
 
     /// Send a transaction with a single [`Message::Configure`](grug_types::Message::Configure).
-    pub async fn configure<S>(
+    pub async fn configure<T>(
         &self,
-        updates: ConfigUpdates,
-        app_updates: BTreeMap<String, Op<Json>>,
+        signer: &mut dyn Signer,
+        new_cfg: Option<Config>,
+        new_app_cfg: Option<T>,
         gas_opt: GasOption,
-        sign_opt: SigningOption<'_, S>,
     ) -> anyhow::Result<tx_sync::Response>
     where
-        S: AsyncSigner,
+        T: Serialize,
     {
-        let msg = Message::configure(updates, app_updates);
-        self.send_message(msg, gas_opt, sign_opt).await
+        let msg = Message::configure(new_cfg, new_app_cfg)?;
+        self.send_message(signer, msg, gas_opt).await
     }
 
     /// Send a transaction with a single [`Message::Transfer`](grug_types::Message::Transfer).
-    pub async fn transfer<C, S>(
+    pub async fn transfer<C>(
         &self,
+        signer: &mut dyn Signer,
         to: Addr,
         coins: C,
         gas_opt: GasOption,
-        sign_opt: SigningOption<'_, S>,
     ) -> anyhow::Result<tx_sync::Response>
     where
         C: TryInto<Coins>,
-        S: AsyncSigner,
         StdError: From<C::Error>,
     {
         let msg = Message::transfer(to, coins)?;
-        self.send_message(msg, gas_opt, sign_opt).await
+        self.send_message(signer, msg, gas_opt).await
     }
 
     /// Send a transaction with a single [`Message::Upload`](grug_types::Message::Upload).
-    pub async fn upload<B, S>(
+    pub async fn upload<B>(
         &self,
+        signer: &mut dyn Signer,
         code: B,
         gas_opt: GasOption,
-        sign_opt: SigningOption<'_, S>,
     ) -> anyhow::Result<tx_sync::Response>
     where
         B: Into<Binary>,
-        S: AsyncSigner,
     {
         let msg = Message::upload(code);
-        self.send_message(msg, gas_opt, sign_opt).await
+        self.send_message(signer, msg, gas_opt).await
     }
 
     /// Send a transaction with a single [`Message::Instantiate`](grug_types::Message::Instantiate).
     ///
     /// Return the deployed contract's address.
-    pub async fn instantiate<M, S, L, C, T>(
+    pub async fn instantiate<M, S, C, T>(
         &self,
+        signer: &mut dyn Signer,
         code_hash: Hash256,
         msg: &M,
         salt: S,
-        label: Option<L>,
+        label: Option<&str>,
         funds: C,
         gas_opt: GasOption,
-        sign_opt: SigningOption<'_, T>,
         admin_opt: AdminOption,
     ) -> anyhow::Result<(Addr, tx_sync::Response)>
     where
         M: Serialize,
         S: Into<Binary>,
-        L: Into<String>,
         C: TryInto<Coins>,
-        T: AsyncSigner,
+        T: Signer,
         StdError: From<C::Error>,
     {
         let salt = salt.into();
-        let address = Addr::derive(sign_opt.sender, code_hash, &salt);
+        let address = Addr::derive(signer.address(), code_hash, &salt);
         let admin = admin_opt.decide(address);
 
         let msg = Message::instantiate(code_hash, msg, salt, label, admin, funds)?;
-        let res = self.send_message(msg, gas_opt, sign_opt).await?;
+        let res = self.send_message(signer, msg, gas_opt).await?;
 
         Ok((address, res))
     }
@@ -533,37 +529,36 @@ impl Client {
     /// with the code in one go.
     ///
     /// Return the code hash, and the deployed contract's address.
-    pub async fn upload_and_instantiate<M, B, S, L, C, T>(
+    pub async fn upload_and_instantiate<M, B, S, C, T>(
         &self,
+        signer: &mut dyn Signer,
         code: B,
         msg: &M,
         salt: S,
-        label: Option<L>,
+        label: Option<&str>,
         funds: C,
         gas_opt: GasOption,
-        sign_opt: SigningOption<'_, T>,
         admin_opt: AdminOption,
     ) -> anyhow::Result<(Hash256, Addr, tx_sync::Response)>
     where
         M: Serialize,
         B: Into<Binary>,
         S: Into<Binary>,
-        L: Into<String>,
         C: TryInto<Coins>,
-        T: AsyncSigner,
+        T: Signer,
         StdError: From<C::Error>,
     {
         let code = code.into();
         let code_hash = code.hash256();
         let salt = salt.into();
-        let address = Addr::derive(sign_opt.sender, code_hash, &salt);
+        let address = Addr::derive(signer.address(), code_hash, &salt);
         let admin = admin_opt.decide(address);
 
-        let msgs = vec![
+        let msgs = NonEmpty::new_unchecked(vec![
             Message::upload(code),
             Message::instantiate(code_hash, msg, salt, label, admin, funds)?,
-        ];
-        let res = self.send_messages(msgs, gas_opt, sign_opt).await?;
+        ]);
+        let res = self.send_messages(signer, msgs, gas_opt).await?;
 
         Ok((code_hash, address, res))
     }
@@ -571,37 +566,37 @@ impl Client {
     /// Send a transaction with a single [`Message::Execute`](grug_types::Message::Execute).
     pub async fn execute<M, C, S>(
         &self,
+        signer: &mut dyn Signer,
         contract: Addr,
         msg: &M,
         funds: C,
         gas_opt: GasOption,
-        sign_opt: SigningOption<'_, S>,
     ) -> anyhow::Result<tx_sync::Response>
     where
         M: Serialize,
         C: TryInto<Coins>,
-        S: AsyncSigner,
+        S: Signer,
         StdError: From<C::Error>,
     {
         let msg = Message::execute(contract, msg, funds)?;
-        self.send_message(msg, gas_opt, sign_opt).await
+        self.send_message(signer, msg, gas_opt).await
     }
 
     /// Send a transaction with a single [`Message::Migrate`](grug_types::Message::Migrate).
     pub async fn migrate<M, S>(
         &self,
+        signer: &mut dyn Signer,
         contract: Addr,
         new_code_hash: Hash256,
         msg: &M,
         gas_opt: GasOption,
-        sign_opt: SigningOption<'_, S>,
     ) -> anyhow::Result<tx_sync::Response>
     where
         M: Serialize,
-        S: AsyncSigner,
+        S: Signer,
     {
         let msg = Message::migrate(contract, new_code_hash, msg)?;
-        self.send_message(msg, gas_opt, sign_opt).await
+        self.send_message(signer, msg, gas_opt).await
     }
 }
 

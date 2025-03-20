@@ -1,6 +1,6 @@
-import type { Config, ConfigParameter, Prettify } from "@leftcurve/types";
-import { type QueryParameter, type UseQueryReturnType, useQuery } from "../query";
-import { useConfig } from "./useConfig";
+import type { Config, ConfigParameter, Prettify } from "@left-curve/types";
+import { type QueryParameter, type UseQueryReturnType, useQuery } from "../query.js";
+import { useConfig } from "./useConfig.js";
 
 import {
   type GetBlockData,
@@ -9,7 +9,7 @@ import {
   type GetBlockQueryFnData,
   type GetBlockQueryKey,
   getBlockQueryOptions,
-} from "@leftcurve/connect-kit/handlers";
+} from "@left-curve/connect-kit/handlers";
 
 export type UseBlockParameters<
   config extends Config = Config,

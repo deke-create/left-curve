@@ -6,6 +6,7 @@ mod bound;
 mod builder;
 mod bytes;
 mod changeset;
+mod code;
 mod coin;
 mod coin_pair;
 mod coins;
@@ -17,29 +18,33 @@ mod encoded_bytes;
 mod encoders;
 mod error;
 mod event;
+mod ffi;
 mod hash;
 mod hashers;
 mod imports;
+mod json;
 mod length_bounded;
 mod lengthy;
 mod macros;
 mod non_zero;
+mod outcome;
 mod query;
 mod response;
 mod result;
 mod serializers;
 mod signer;
+mod status;
 mod time;
 mod tx;
 mod unique_vec;
 mod utils;
 
 pub use {
-    address::*, app::*, bank::*, binary::*, bound::*, builder::*, bytes::*, changeset::*, coin::*,
-    coin_pair::*, coins::*, context::*, db::*, denom::*, empty::*, encoded_bytes::*, encoders::*,
-    error::*, event::*, hash::*, hashers::*, imports::*, length_bounded::*, lengthy::*,
-    non_zero::*, query::*, response::*, result::*, serializers::*, signer::*, time::*, tx::*,
-    unique_vec::*, utils::*,
+    address::*, app::*, bank::*, binary::*, bound::*, builder::*, bytes::*, changeset::*, code::*,
+    coin::*, coin_pair::*, coins::*, context::*, db::*, denom::*, empty::*, encoded_bytes::*,
+    encoders::*, error::*, event::*, ffi::*, hash::*, hashers::*, imports::*, json::*,
+    length_bounded::*, lengthy::*, non_zero::*, outcome::*, query::*, response::*, result::*,
+    serializers::*, signer::*, status::*, time::*, tx::*, unique_vec::*, utils::*,
 };
 
 // ---------------------------------- testing ----------------------------------
@@ -50,6 +55,10 @@ mod testing;
 #[cfg(not(target_arch = "wasm32"))]
 pub use testing::*;
 
-// -------------------------------- re-exports ---------------------------------
+// ---------------------------------- prelude ----------------------------------
 
-pub use serde_json::{json, Value as Json};
+// Dependencies used by the procedural macros.
+#[doc(hidden)]
+pub mod __private {
+    pub use {::borsh, ::serde, ::serde_json, ::serde_with};
+}

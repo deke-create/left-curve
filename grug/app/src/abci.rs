@@ -1,136 +1,141 @@
 use {
-    crate::{App, AppError, Db, Vm},
+    crate::{App, AppError, AppResult, Db, Indexer, ProposalPreparer, Vm},
     grug_math::Inner,
     grug_types::{
-        Attribute, BlockInfo, Duration, Event, GenericResult, Hash256, Outcome, Timestamp,
-        TxOutcome, GENESIS_BLOCK_HASH,
+        BlockInfo, CheckTxOutcome, Duration, GenericResult, Hash256, JsonSerExt, TxOutcome,
+        GENESIS_BLOCK_HASH,
     },
     prost::bytes::Bytes,
-    std::{any::type_name, net::ToSocketAddrs},
-    tendermint_abci::{Application, Error as ABCIError, ServerBuilder},
-    tendermint_proto::{
-        abci::{
-            Event as TmEvent, EventAttribute as TmAttribute, ExecTxResult, RequestCheckTx,
-            RequestFinalizeBlock, RequestInfo, RequestInitChain, RequestQuery, ResponseCheckTx,
-            ResponseCommit, ResponseFinalizeBlock, ResponseInfo, ResponseInitChain, ResponseQuery,
-        },
-        crypto::{ProofOp, ProofOps},
-        google::protobuf::Timestamp as TmTimestamp,
+    std::{
+        any::type_name,
+        future::Future,
+        num::NonZeroU32,
+        pin::Pin,
+        task::{Context, Poll},
     },
+    tendermint::{
+        abci::{request, response, types::ExecTxResult, Code},
+        block::Height,
+        merkle::proof::{ProofOp, ProofOps},
+        v0_38::abci::{Request, Response},
+        AppHash, Hash, Time,
+    },
+    tower::Service,
+    tower_abci::BoxError,
 };
 
-impl<DB, VM> App<DB, VM>
+impl<DB, VM, PP, ID> Service<Request> for App<DB, VM, PP, ID>
 where
-    DB: Db + Clone + Send + 'static,
-    VM: Vm + Clone + Send + 'static,
-    AppError: From<DB::Error> + From<VM::Error>,
+    DB: Db,
+    VM: Vm + Clone + 'static,
+    ID: Indexer,
+    PP: ProposalPreparer,
+    AppError: From<DB::Error> + From<VM::Error> + From<PP::Error> + From<ID::Error>,
 {
-    pub fn start_abci_server<A>(self, read_buf_size: usize, addr: A) -> Result<(), ABCIError>
-    where
-        A: ToSocketAddrs,
-    {
-        ServerBuilder::new(read_buf_size).bind(addr, self)?.listen()
+    type Error = BoxError;
+    type Future =
+        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
+    type Response = Response;
+
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: Request) -> Self::Future {
+        let res = self.tower_call(req);
+        Box::pin(async move { res.map_err(|err| Box::new(err) as BoxError) })
     }
 }
 
-impl<DB, VM> Application for App<DB, VM>
+impl<DB, VM, PP, ID> App<DB, VM, PP, ID>
 where
-    DB: Db + Clone + Send + 'static,
-    VM: Vm + Clone + Send + 'static,
-    AppError: From<DB::Error> + From<VM::Error>,
+    DB: Db,
+    VM: Vm + Clone + 'static,
+    ID: Indexer,
+    PP: ProposalPreparer,
+    AppError: From<DB::Error> + From<VM::Error> + From<PP::Error> + From<ID::Error>,
 {
-    fn info(&self, _req: RequestInfo) -> ResponseInfo {
-        match self.do_info() {
-            Ok((last_block_height, last_block_version)) => ResponseInfo {
-                data: env!("CARGO_PKG_NAME").into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                app_version: 1,
-                last_block_app_hash: last_block_version.into_inner().to_vec().into(),
-                last_block_height: last_block_height as i64,
+    fn tower_call(&self, req: Request) -> AppResult<Response> {
+        match req {
+            // -------------------- block execution methods --------------------
+            Request::InitChain(req) => {
+                let res = self.tower_init_chain(req)?;
+                Ok(Response::InitChain(res))
             },
-            Err(err) => panic!("failed to get info: {err}"),
+            Request::PrepareProposal(req) => {
+                let res = self.tower_prepare_proposal(req)?;
+                Ok(Response::PrepareProposal(res))
+            },
+            Request::ProcessProposal(_) => {
+                // Always accept.
+                let res = response::ProcessProposal::Accept;
+                Ok(Response::ProcessProposal(res))
+            },
+            Request::ExtendVote(_) => {
+                // Vote extension isn't supported yet. Do nothing.
+                let res = response::ExtendVote {
+                    vote_extension: Bytes::default(),
+                };
+                Ok(Response::ExtendVote(res))
+            },
+            Request::VerifyVoteExtension(_) => {
+                // Always accept.
+                let res = response::VerifyVoteExtension::Accept;
+                Ok(Response::VerifyVoteExtension(res))
+            },
+            Request::FinalizeBlock(req) => {
+                let res = self.tower_finalize_block(req)?;
+                Ok(Response::FinalizeBlock(res))
+            },
+            Request::Commit => {
+                let res = self.tower_commit()?;
+                Ok(Response::Commit(res))
+            },
+
+            // ------------------------ mempool methods ------------------------
+            Request::CheckTx(req) => {
+                let res = self.tower_check_tx(req)?;
+                Ok(Response::CheckTx(res))
+            },
+
+            // ------------------------- query methods -------------------------
+            Request::Info(..) => {
+                let res = self.tower_info()?;
+                Ok(Response::Info(res))
+            },
+            Request::Query(req) => {
+                let res = self.tower_query(req)?;
+                Ok(Response::Query(res))
+            },
+
+            // ---------------------- state sync methods -----------------------
+            Request::ListSnapshots => Ok(Response::ListSnapshots(Default::default())),
+            Request::OfferSnapshot(_) => Ok(Response::OfferSnapshot(Default::default())),
+            Request::LoadSnapshotChunk(_) => Ok(Response::LoadSnapshotChunk(Default::default())),
+            Request::ApplySnapshotChunk(_) => Ok(Response::ApplySnapshotChunk(Default::default())),
+
+            // ------------------------- other methods -------------------------
+            Request::Echo(req) => {
+                let res = response::Echo {
+                    message: req.message,
+                };
+                Ok(Response::Echo(res))
+            },
+            Request::Flush => Ok(Response::Flush),
         }
     }
 
-    fn init_chain(&self, req: RequestInitChain) -> ResponseInitChain {
-        // Always use zero as the genesis height.
-        // Ignore the block height from the ABCI request.
-        //
-        // It's mandatory that we genesis from block zero, such that block
-        // height matches the DB version.
-        //
-        // It doesn't seem like setting the `initial_height` in CometBFT's
-        // genesis file does anything. Setting it to zero, Comet still attmpts
-        // to start at block 1.
-        let block = from_tm_block(0, req.time, None);
-
-        match self.do_init_chain_raw(req.chain_id, block, &req.app_state_bytes) {
-            Ok(app_hash) => ResponseInitChain {
-                consensus_params: req.consensus_params,
-                validators: req.validators,
-                app_hash: app_hash.into_inner().to_vec().into(),
-            },
-            Err(err) => panic!("failed to init chain: {err}"),
-        }
-    }
-
-    fn finalize_block(&self, req: RequestFinalizeBlock) -> ResponseFinalizeBlock {
-        let block = from_tm_block(req.height, req.time, Some(req.hash));
-
-        match self.do_finalize_block_raw(block, &req.txs) {
-            Ok(outcome) => {
-                // In Cosmos SDK, this refers to the Begin/EndBlocker events.
-                // For us, this is the cronjob events.
-                // Note that failed cronjobs are ignored (not included in `ResponseFinalizeBlock`).
-                let events = outcome
-                    .cron_outcomes
-                    .into_iter()
-                    .filter_map(|outcome| outcome.result.ok().map(into_tm_events))
-                    .flatten()
-                    .collect();
-
-                let tx_results = outcome
-                    .tx_outcomes
-                    .into_iter()
-                    .map(into_tm_tx_result)
-                    .collect();
-
-                ResponseFinalizeBlock {
-                    app_hash: outcome.app_hash.into_inner().to_vec().into(),
-                    events,
-                    tx_results,
-                    // We haven't implemented any mechanism to alter the
-                    // validator set or consensus params yet.
-                    validator_updates: vec![],
-                    consensus_param_updates: None,
-                }
-            },
-            Err(err) => panic!("failed to finalize block: {err}"),
-        }
-    }
-
-    fn commit(&self) -> ResponseCommit {
-        match self.do_commit() {
-            Ok(()) => {
-                ResponseCommit {
-                    retain_height: 0, // TODO: what this means??
-                }
-            },
-            Err(err) => panic!("failed to commit: {err}"),
-        }
-    }
-
-    fn check_tx(&self, req: RequestCheckTx) -> ResponseCheckTx {
+    fn tower_check_tx(&self, req: request::CheckTx) -> AppResult<response::CheckTx> {
         // Note: We don't have separate logics for `CheckTyType::New` vs `Recheck`.
-        match self.do_check_tx_raw(&req.tx) {
-            Ok(Outcome {
+        let res = match self.do_check_tx_raw(&req.tx) {
+            Ok(CheckTxOutcome {
                 result: GenericResult::Ok(events),
                 gas_limit,
                 ..
-            }) => ResponseCheckTx {
-                code: 0,
-                events: into_tm_events(events),
+            }) => response::CheckTx {
+                code: Code::Ok,
                 gas_wanted: gas_limit.unwrap() as i64,
+                info: events.to_json_string()?,
                 // Note: Return `Outcome::gas_limited` instead of `gas_used here.
                 // This is because in `CheckTx` we don't run the entire tx, just
                 // the authentication part. As such, the gas consumption is
@@ -139,154 +144,218 @@ where
                 gas_used: gas_limit.unwrap() as i64,
                 ..Default::default()
             },
-            Ok(Outcome {
+            Ok(CheckTxOutcome {
                 result: GenericResult::Err(err),
                 gas_limit,
                 ..
-            }) => ResponseCheckTx {
-                code: 1,
+            }) => response::CheckTx {
+                code: into_tm_code_error(1),
                 codespace: "tx".into(),
                 log: err,
                 gas_wanted: gas_limit.unwrap() as i64,
                 gas_used: gas_limit.unwrap() as i64,
                 ..Default::default()
             },
-            Err(err) => ResponseCheckTx {
-                code: 1,
+            Err(err) => response::CheckTx {
+                code: into_tm_code_error(1),
                 codespace: "simulate".into(),
                 log: err.to_string(),
                 ..Default::default()
             },
+        };
+
+        Ok(res)
+    }
+
+    fn tower_commit(&self) -> AppResult<response::Commit> {
+        match self.do_commit() {
+            Ok(()) => Ok(response::Commit {
+                // This field is ignored since CometBFT 0.38.
+                // TODO: Can we omit this?????
+                data: Default::default(),
+                // TODO: what this means??
+                retain_height: Height::default(),
+            }),
+            Err(err) => panic!("failed to commit: {err}"),
         }
     }
 
-    fn query(&self, req: RequestQuery) -> ResponseQuery {
-        match req.path.as_str() {
-            "/app" => match self.do_query_app_raw(&req.data, req.height as u64, req.prove) {
-                Ok(res) => ResponseQuery {
-                    code: 0,
+    fn tower_finalize_block(
+        &self,
+        req: request::FinalizeBlock,
+    ) -> AppResult<response::FinalizeBlock> {
+        let block = from_tm_block(req.height.value(), req.time, Some(req.hash));
+
+        match self.do_finalize_block_raw(block, &req.txs) {
+            Ok(outcome) => {
+                let tx_results = outcome
+                    .tx_outcomes
+                    .into_iter()
+                    .map(into_tm_tx_result)
+                    .collect();
+
+                Ok(response::FinalizeBlock {
+                    app_hash: into_tm_app_hash(outcome.app_hash),
+                    // We don't return events to Tendermint (perhaps with the
+                    // exception of IBC events which may be needed by relayers).
+                    // Instead we use `BlockOutcome` which is provided to the
+                    // indexer.
+                    // In the future, we may switch to another consensus engine
+                    // such as Malachite which doesn't deal with events at all.
+                    events: vec![],
+                    tx_results,
+                    // We haven't implemented any mechanism to alter the
+                    // validator set or consensus params yet.
+                    validator_updates: vec![],
+                    consensus_param_updates: None,
+                })
+            },
+            Err(err) => panic!("failed to finalize block: {err}"),
+        }
+    }
+
+    fn tower_info(&self) -> AppResult<response::Info> {
+        let (last_block_height, last_block_version) = self.do_info()?;
+
+        Ok(response::Info {
+            data: env!("CARGO_PKG_NAME").into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            app_version: 1,
+            last_block_height: last_block_height
+                .try_into()
+                .expect("block height exceeds i64"),
+            last_block_app_hash: into_tm_app_hash(last_block_version),
+        })
+    }
+
+    fn tower_init_chain(&self, req: request::InitChain) -> AppResult<response::InitChain> {
+        let block = from_tm_block(0, req.time, None);
+
+        match self.do_init_chain_raw(req.chain_id, block, &req.app_state_bytes) {
+            Ok(app_hash) => Ok(response::InitChain {
+                consensus_params: Some(req.consensus_params),
+                validators: req.validators,
+                app_hash: into_tm_app_hash(app_hash),
+            }),
+            Err(err) => panic!("failed to init chain: {err}"),
+        }
+    }
+
+    fn tower_prepare_proposal(
+        &self,
+        req: request::PrepareProposal,
+    ) -> AppResult<response::PrepareProposal> {
+        let max_tx_bytes = req.max_tx_bytes.try_into().unwrap_or(0);
+        let txs = self.do_prepare_proposal(req.txs.clone(), max_tx_bytes);
+
+        Ok(response::PrepareProposal { txs })
+    }
+
+    fn tower_query(&self, req: request::Query) -> AppResult<response::Query> {
+        let res = match req.path.as_str() {
+            "/app" => match self.do_query_app_raw(&req.data, req.height.value(), req.prove) {
+                Ok(res) => response::Query {
+                    code: Code::Ok,
                     value: res.into(),
                     ..Default::default()
                 },
-                Err(err) => ResponseQuery {
-                    code: 1,
+                Err(err) => response::Query {
+                    code: into_tm_code_error(1),
                     codespace: "app".into(),
                     log: err.to_string(),
                     ..Default::default()
                 },
             },
-            "/simulate" => match self.do_simulate_raw(&req.data, req.height as u64, req.prove) {
-                Ok(outcome) => ResponseQuery {
-                    code: 0,
+            "/simulate" => match self.do_simulate_raw(&req.data, req.height.value(), req.prove) {
+                Ok(outcome) => response::Query {
+                    code: Code::Ok,
                     value: outcome.into(),
                     ..Default::default()
                 },
-                Err(err) => ResponseQuery {
-                    code: 1,
+                Err(err) => response::Query {
+                    code: into_tm_code_error(1),
                     codespace: "simulate".into(),
                     log: err.to_string(),
                     ..Default::default()
                 },
             },
-            "/store" => match self.do_query_store(&req.data, req.height as u64, req.prove) {
+            "/store" => match self.do_query_store(&req.data, req.height.value(), req.prove) {
                 Ok((value, proof)) => {
-                    let proof_ops = proof.map(|proof| ProofOps {
+                    let proof = proof.map(|proof| ProofOps {
                         ops: vec![ProofOp {
-                            r#type: type_name::<DB::Proof>().into(),
+                            field_type: type_name::<DB::Proof>().into(),
                             key: req.data.into(),
                             data: proof,
                         }],
                     });
-                    ResponseQuery {
-                        code: 0,
+                    response::Query {
+                        code: Code::Ok,
                         value: value.unwrap_or_default().into(),
                         height: req.height,
-                        proof_ops,
+                        proof,
                         ..Default::default()
                     }
                 },
-                Err(err) => ResponseQuery {
-                    code: 1,
+                Err(err) => response::Query {
+                    code: into_tm_code_error(1),
                     codespace: "store".into(),
                     log: err.to_string(),
                     ..Default::default()
                 },
             },
-            unknown => ResponseQuery {
-                code: 1,
+            unknown => response::Query {
+                code: into_tm_code_error(1),
                 codespace: "app".into(),
                 log: format!("unknown path `{unknown}`; must be `/app`, `/simulate`, or `/store`"),
                 ..Default::default()
             },
-        }
+        };
+
+        Ok(res)
     }
 }
 
-fn from_tm_block(height: i64, time: Option<TmTimestamp>, hash: Option<Bytes>) -> BlockInfo {
+fn from_tm_block(height: u64, time: Time, hash: Option<Hash>) -> BlockInfo {
     BlockInfo {
-        height: height as u64,
-        timestamp: from_tm_timestamp(time.expect("block time not found")),
+        height,
+        timestamp: Duration::from_nanos(time.unix_timestamp_nanos() as u128),
         hash: hash.map(from_tm_hash).unwrap_or(GENESIS_BLOCK_HASH),
     }
 }
 
-fn from_tm_timestamp(time: TmTimestamp) -> Timestamp {
-    Timestamp::from_seconds(time.seconds as u128) + Duration::from_nanos(time.nanos as u128)
-}
-
-fn from_tm_hash(bytes: Bytes) -> Hash256 {
-    bytes
-        .as_ref()
-        .try_into()
-        .expect("incorrect block hash length")
+fn from_tm_hash(bytes: Hash) -> Hash256 {
+    match bytes {
+        Hash::Sha256(hash) => Hash256::from_inner(hash),
+        Hash::None => panic!("unexpected empty hash"),
+    }
 }
 
 fn into_tm_tx_result(outcome: TxOutcome) -> ExecTxResult {
     match outcome.result {
         GenericResult::Ok(_) => ExecTxResult {
-            code: 0,
+            code: Code::Ok,
             gas_wanted: outcome.gas_limit as i64,
             gas_used: outcome.gas_used as i64,
-            events: into_tm_events(outcome.events),
             ..Default::default()
         },
         GenericResult::Err(err) => ExecTxResult {
-            code: 1,
+            code: into_tm_code_error(1),
             codespace: "tx".to_string(),
             log: err,
             gas_wanted: outcome.gas_limit as i64,
             gas_used: outcome.gas_used as i64,
-            events: into_tm_events(outcome.events),
             ..Default::default()
         },
     }
 }
 
-fn into_tm_events<I>(events: I) -> Vec<TmEvent>
-where
-    I: IntoIterator<Item = Event>,
-{
-    events.into_iter().map(into_tm_event).collect()
+fn into_tm_app_hash(hash: Hash256) -> AppHash {
+    hash.into_inner().to_vec().try_into().unwrap()
 }
 
-fn into_tm_event(event: Event) -> TmEvent {
-    TmEvent {
-        r#type: event.r#type,
-        attributes: into_tm_attributes(event.attributes),
-    }
-}
-
-fn into_tm_attributes<I>(attrs: I) -> Vec<TmAttribute>
-where
-    I: IntoIterator<Item = Attribute>,
-{
-    attrs.into_iter().map(into_tm_attribute).collect()
-}
-
-fn into_tm_attribute(attr: Attribute) -> TmAttribute {
-    TmAttribute {
-        key: attr.key,
-        value: attr.value,
-        index: true,
-    }
+/// Be sure to pass a non-zero error code.
+fn into_tm_code_error(code: u32) -> Code {
+    Code::Err(NonZeroU32::new(code).unwrap_or_else(|| {
+        panic!("expected non-zero error code, got {code}");
+    }))
 }

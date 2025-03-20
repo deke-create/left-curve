@@ -1,5 +1,5 @@
 use {
-    crate::{Addr, Duration, Event, GenericResult, Hash256, Json, Message, Timestamp},
+    crate::{Addr, Duration, Hash256, Json, Label, Message, Timestamp, Tx},
     borsh::{BorshDeserialize, BorshSerialize},
     hex_literal::hex,
     serde::{Deserialize, Serialize},
@@ -42,7 +42,7 @@ pub struct GenesisState {
     /// Chain configurations.
     pub config: Config,
     /// App-specific configurations.
-    pub app_configs: BTreeMap<String, Json>,
+    pub app_config: Json,
     /// Messages to be executed in order during genesis.
     pub msgs: Vec<Message>,
 }
@@ -62,23 +62,10 @@ pub struct Config {
     pub cronjobs: BTreeMap<Addr, Duration>,
     /// Permissions for certain gated actions.
     pub permissions: Permissions,
-}
-
-/// Set of updates to be made to the config.
-///
-/// A field being `Some` means it is to be updated to be the given value;
-/// it being `None` means it is not to be updated.
-#[skip_serializing_none]
-#[derive(
-    Serialize, Deserialize, BorshSerialize, BorshDeserialize, Default, Debug, Clone, PartialEq, Eq,
-)]
-#[serde(deny_unknown_fields)]
-pub struct ConfigUpdates {
-    pub owner: Option<Addr>,
-    pub bank: Option<Addr>,
-    pub taxman: Option<Addr>,
-    pub cronjobs: Option<BTreeMap<Addr, Duration>>,
-    pub permissions: Option<Permissions>,
+    /// Maximum age allowed for orphaned codes.
+    /// A code is deleted if it remains orphaned (not used by any contract) for
+    /// longer than this duration.
+    pub max_orphan_age: Duration,
 }
 
 #[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq, Eq)]
@@ -110,57 +97,18 @@ pub struct BlockInfo {
     pub hash: Hash256,
 }
 
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Block {
+    pub info: BlockInfo,
+    pub txs: Vec<Tx>,
+}
+
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ContractInfo {
     pub code_hash: Hash256,
-    pub label: Option<String>,
+    pub label: Option<Label>,
     pub admin: Option<Addr>,
-}
-
-/// Outcome of processing a message or a cronjob.
-///
-/// Includes the events emitted, and gas consumption.
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct Outcome {
-    // `None` means the call was done with unlimited gas, such as cronjobs.
-    pub gas_limit: Option<u64>,
-    pub gas_used: u64,
-    pub result: GenericResult<Vec<Event>>,
-}
-
-/// Outcome of processing a transaction.
-///
-/// Different from `Outcome`, which can either succeed or fail, a transaction
-/// can partially succeed. A typical such scenario is:
-///
-/// - `withhold_fee` succeeds
-/// - `authenticate` succeeds,
-/// - one of the messages fail
-/// - `finalize_fee` succeeds
-///
-/// In this case, state changes from fee handling (e.g. deducting the fee from
-/// the sender account) and authentication (e.g. incrementing the sender account's
-/// sequence number) will be committed, and relevant events emitted to reflect
-/// this. However, state changes and events from the messages are discarded.
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct TxOutcome {
-    pub gas_limit: u64,
-    pub gas_used: u64,
-    pub events: Vec<Event>,
-    pub result: GenericResult<()>,
-}
-
-#[derive(Debug)]
-/// Outcome of executing a block.
-pub struct BlockOutcome {
-    /// The Merkle root hash after executing this block.
-    pub app_hash: Hash256,
-    /// Results of executing the cronjobs.
-    pub cron_outcomes: Vec<Outcome>,
-    /// Results of executing the transactions.
-    pub tx_outcomes: Vec<TxOutcome>,
 }
